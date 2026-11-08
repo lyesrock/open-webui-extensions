@@ -31,6 +31,26 @@ Features:
 Full documentation: [actions/factcheck_web.md](actions/factcheck_web.md)
 (installation, valves, production tips).
 
+### ✅ In-place Web Correction Action — "Corriger sur le web" ([actions/correct_web.py](actions/correct_web.py))
+
+Adds a **Correct on the web** button under every assistant message. One click searches
+the web **in the background** (nothing is added to the conversation) and then **replaces
+the answer in place**: each factual error becomes `~~wrong~~ [corrected](source-url)`
+inside the original text — the corrected word itself links to the source that proves it.
+No report, no new message; the UI updates live via the backend's message event.
+
+Features:
+
+- 🔧 True in-place edit (`POST /chats/{id}/messages/{mid}` + live websocket refresh)
+- 🧠 Non-persisted completion replaying the chain up to the clicked answer
+  (KV-cache friendly — later turns excluded)
+- 🧯 Trust guards before any write-back (visible-length, anti-paraphrase overlap,
+  no-report checks): doubtful output is rejected and the original text is **kept**
+- 🛑 Hard search budgets and stop rules — no runaway loops
+- 🧪 Dependency-free test suite: `python actions/test_correct_web.py`
+
+Full documentation: [actions/correct_web.md](actions/correct_web.md).
+
 ## 🚀 Installation
 
 **Recommended (any Open WebUI ≥ 0.5, no restart):**
