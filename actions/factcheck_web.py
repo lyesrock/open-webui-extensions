@@ -1,7 +1,7 @@
 """
 title: Vérifier sur le web
 author: lyesrock
-version: 5.2.1
+version: 6.0.0
 description: Vérifie les faits d'une réponse via la recherche web de l'instance et restitue le résultat comme un tour normal du chat (le modèle de la conversation répond dans son propre contexte)
 required_open_webui_version: 0.13.0
 license: MIT
@@ -218,8 +218,18 @@ def _build_instruction(valves, web_search_on: bool, target_excerpt: str = "", ta
 
     if valves.include_correction:
         correction_block = (
-            "9. Termine par un bloc \"Version corrigée\" reprenant le texte initial avec "
-            "UNIQUEMENT les corrections nécessaires (ne réécris pas ce qui est exact)."
+            "9. Termine par une section \"## Réponse corrigée\" qui reproduit le texte vérifié "
+            "**à l'identique** (copie intégrale : ne résume pas, ne reformule pas, ne réordonne "
+            "rien) puis applique-lui ces balisages STRICTEMENT :\n"
+            "   - fragment confirmé exact : inchangé, suivi de \" ✅\" ;\n"
+            "   - fragment faux ou imprécis : ~~ancien texte~~ <u>texte corrigé</u> immédiatement "
+            "suivi de [n] ;\n"
+            "   - fragment non vérifié : inchangé, précédé de \"⚠️ \" ;\n"
+            "   - [n] = numéro (à partir de 1) du résultat de recherche utilisé pour ce fragment, "
+            "dans l'ordre des résultats réellement reçus ; n'invente jamais un numéro.\n"
+            "   AUCUN autre balisage HTML n'est autorisé (il serait affiché en texte brut) : "
+            "uniquement ~~…~~, <u>…</u>, [n], ✅ et ⚠️. Si le texte dépasse ~400 mots, remplace "
+            "les paragraphes sans affirmation vérifiée par « […] » pour rester concise."
         )
     else:
         correction_block = (

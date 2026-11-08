@@ -150,7 +150,11 @@ assert "SUJETS DE VÉRIFICATION" in instr_last and "extrait RAM" in instr_last
 assert "appelle-les directement" in instr_last, "consigne native anti-je-lance-les-recherches absente"
 assert "plafond dur" in instr_last and "ARRÊT OBLIGATOIRE" in instr_last, "plafond anti-boucle natif absent"
 assert "entre 3 et 6 appels AU TOTAL" in instr_last, "budget de recherches natif (min..max) absent"
-assert len(instr_last) < 4000, "la consigne doit rester courte (pas de duplication du texte entier)"
+assert "## Réponse corrigée" in instr_last, "section diff inline v6 absente"
+assert "~~ancien texte~~ <u>texte corrigé</u>" in instr_last, "balisage diff ~~../<u>..</u> absent"
+assert "[n] = numéro" in instr_last, "règle citation [n] absente"
+assert "AUCUN autre balisage HTML" in instr_last, "liste blanche de balisage absente"
+assert len(instr_last) < 4600, "la consigne doit rester courte (pas de duplication du texte entier)"
 
 instr_mid = module._build_instruction(instance.valves, True, "extrait RAM", False)
 assert "TA DERNIÈRE RÉPONSE" not in instr_mid
