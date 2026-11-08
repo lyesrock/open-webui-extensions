@@ -1,7 +1,7 @@
 """
 title: Corriger sur le web
 author: lyesrock
-version: 1.0.4
+version: 1.0.6
 description: Recherche le web en arrière-plan puis corrige la réponse cliquée EN PLACE (aucun rapport, aucun nouveau message) ; chaque correction est marquée ~~erreur~~ [corrigé](url "source")
 required_open_webui_version: 0.13.0
 license: MIT
@@ -247,6 +247,9 @@ def _build_instruction(valves, web_search_on: bool, target_excerpt: str) -> str:
         "**[2017](https://exemple.fr/hpe \"HPE ProLiant Gen10\")** » —\n"
         "   INTERDITE (phrase entière barrée) : « ~~Le ProLiant DL380 Gen10 est sorti en 2012~~ "
         "**[Le ProLiant DL380 Gen10 est sorti en 2017](https://exemple.fr/hpe \\\"HPE\\\")** ».\n"
+        "   - le remplacement doit être une VALEUR CONCRÈTE énoncée par la source : remplacer par "
+        "« N/A », « MàJ », « inconnu », « indisponible » ou vide est INTERDIT — si la source ne "
+        "donne pas clairement une valeur différente, LAISSE le texte tel quel ;\n"
         "4. Si rien n'est faux (ou non tranchable), retourne le texte mot pour mot, sans un caractère de plus.\n"
         "5. SORTIE STRICTE : uniquement le texte corrigé. Aucun préambule, aucun titre, aucune section, "
         "aucune liste de corrections, aucune remarque finale. Tout balisage HTML autre que ~~…~~ et les "
@@ -473,6 +476,33 @@ def _strip_self_corrections(md: str) -> str:
     return _SEG_RE.sub(_restore, md)
 
 
+_NULL_REPL_RE = re.compile(
+    r"^\s*(?:N/?A|M[àa]J|MAJ|inconnu(?:e)?|indisponible|non trouv[ée]s?|-{1,3}|\?+|…|\.)\s*$",
+    re.IGNORECASE,
+)
+_LINK_TEXT_RE = re.compile(r"\[([^\]\n]{1,160})\]")
+_EMPTY_BOLD_RE = re.compile(r"~~([^~\n]{1,160})~~\s*\*\*\s*\*\*")
+_DANGLING_BOLD_RE = re.compile(r"~~([^~\n]{1,160})~~\s*\*\*[ \t]*$", re.MULTILINE)
+
+
+def _revert_null_replacements(md: str) -> str:
+    """Sanitizer déterministe : une correction dont le remplacement n'apporte AUCUNE
+    information (N/A, MàJ, inconnu, indisponible, vide) est annulée — le mot d'origine
+    est restauré. Empêche les fausses corrections quand la recherche du modèle tombe
+    sur des pages périmées qui ne contredisent rien de façon concrète."""
+
+    def _restore(m):
+        link = _LINK_TEXT_RE.search(m.group(0))
+        if link and _NULL_REPL_RE.match(link.group(1)):
+            return m.group(1)
+        return m.group(0)
+
+    md = _SEG_RE.sub(_restore, md)
+    md = _EMPTY_BOLD_RE.sub(r"\1", md)
+    md = _DANGLING_BOLD_RE.sub(r"\1", md)
+    return md
+
+
 def _word_overlap(original: str, corrected: str) -> float:
     """Fraction des mots d'origine qui subsistent dans le texte corrigé
     (insensible à l'ordre, robuste aux corrections ponctuelles)."""
@@ -498,13 +528,13 @@ def _validate_correction(original: str, corrected: str):
 
     if n_corr == 0:
         overlap0 = _word_overlap(original, corrected)
-        # Aucune marqueur de correction : rien ne sera écrit de toute façon. Cas fréquent :
-        # le modèle tentait de corriger des phrases sur l'assistant (retirées par le sanitizer)
-        # ou reformule à la marge. Tant que la sortie reste une reproduction fidèle, c'est
-        # "rien à corriger" (info), pas un rejet gardé-fou (qui inquiète pour rien).
-        if _RELAXED_BAND[0] <= ratio <= _RELAXED_BAND[1] and overlap0 >= 0.75:
-            return "unchanged", "reformule" if (overlap0 < 0.99 or not (_IDENTICAL_BAND[0] <= ratio <= _IDENTICAL_BAND[1])) else None
-        return "reject", "aucune correction marquée et sortie dérivant du texte d'origine"
+        # Aucun marqueur de correction = RIEN ne sera écrit de toute façon : ce n'est donc
+        # jamais un « rejet » (ni alarme garde-fou). Deux cas : reproduction fidèle
+        # (rien à corriger) ou le modèle a voulu réécrire/répondre au lieu de corriger
+        # (refusé par contrat, texte conservé tel quel).
+        if overlap0 < 0.75 or not (_RELAXED_BAND[0] <= ratio <= _RELAXED_BAND[1]):
+            return "unchanged", "reesquisse"
+        return "unchanged", "reformule" if (overlap0 < 0.99 or not (_IDENTICAL_BAND[0] <= ratio <= _IDENTICAL_BAND[1])) else None
 
     if corrected.lstrip().startswith("## "):
         return "reject", "le modèle a produit un rapport (titre '##') au lieu du texte corrigé"
@@ -548,15 +578,16 @@ async def _correct_in_place(request, model_id, chain, instruction, web_search_on
         progress.cancel()
 
     duration = round(time.monotonic() - started, 1)
-    corrected = _strip_self_corrections(corrected)
+    corrected = _strip_self_corrections(_revert_null_replacements(corrected))
     original = str(chain[-1].get("content") or "") if chain else ""
     verdict, detail = _validate_correction(original, corrected)
 
     if verdict == "unchanged":
-        note = " (le modèle a reformulé à la marge sans corriger aucune faute)" if detail == "reformule" else ""
-        await _log(emitter, f"Terminée en {duration} s : aucune erreur factuelle détectée — texte conservé.{note}")
-        await _emit(emitter, {"type": "status", "data": {"description": "Aucune erreur détectée.", "done": True}})
-        await _toast(emitter, "info", "Aucune erreur factuelle détectée — la réponse est restée inchangée.")
+        note = " (le modèle a reformulé à la marge sans corriger aucune faute)" if detail == "reformule" else \
+               " (le modèle a voulu réécrire la réponse au lieu de la corriger — refusé par contrat, texte conservé)" if detail == "reesquisse" else ""
+        await _log(emitter, f"Terminée en {duration} s : aucune erreur factuelle à corriger sur ce message — texte conservé.{note}")
+        await _emit(emitter, {"type": "status", "data": {"description": "Aucune erreur à corriger.", "done": True}})
+        await _toast(emitter, "info", "Aucune erreur factuelle à corriger — la réponse est restée inchangée.")
         return None
     if verdict == "reject":
         await _log(emitter, f"Sortie rejetée ({detail}) — le texte d'origine est conservé.", "warn")
@@ -768,11 +799,11 @@ class Action:
             progress.cancel()
 
         duration = round(time.monotonic() - started, 1)
-        corrected = _strip_self_corrections(corrected)
+        corrected = _strip_self_corrections(_revert_null_replacements(corrected))
         verdict, detail = _validate_correction(full_content, corrected)
         if verdict == "unchanged":
-            await _log(emitter=__event_emitter__, message=f"Terminée en {duration} s : aucune erreur détectée — texte inchangé.")
-            await _toast(__event_emitter__, "info", "Aucune erreur factuelle détectée — la réponse est restée inchangée.")
+            await _log(emitter=__event_emitter__, message=f"Terminée en {duration} s : aucune erreur à corriger — texte inchangé.")
+            await _toast(__event_emitter__, "info", "Aucune erreur factuelle à corriger — la réponse est restée inchangée.")
             return None
         if verdict == "reject":
             await _log(__event_emitter__, f"Sortie rejetée ({detail}) — texte d'origine conservé.", "warn")

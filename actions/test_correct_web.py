@@ -144,8 +144,9 @@ reworded = orig.replace(
 v, detail = mod._validate_correction(orig, reworded)
 check("reformulation sans marqueur -> unchanged (pas un faux rejet)", v == "unchanged" and detail == "reformule")
 
-v, reason = mod._validate_correction(orig, "Autre contenu entièrement différent, hors sujet.")
-check("sans marqueur et dérive totale -> reject", v == "reject" and "dériv" in reason)
+v, detail = mod._validate_correction(orig, "Autre contenu entièrement différent, hors sujet.")
+check("sans marqueur et dérive totale -> unchanged/reesquisse (jamais écrit, jamais d'alarme)",
+      v == "unchanged" and detail == "reesquisse")
 
 # ---------------------------------------------------------------- _strip_self_corrections
 selfmd = ("Voici un point.\n"
@@ -161,6 +162,18 @@ v, n = mod._validate_correction(_orig3, stripped)
 check("validate apres sanitizer : 1 seule correction", v == "update" and n == 1)
 check(" chevauchement de mots identique", mod._word_overlap(orig, orig) == 1.0)
 check("chevauchement de mots divergent", mod._word_overlap(orig, "autre chose totalement différente du tout") < 0.3)
+
+# ---------------------------------------------------------------- _revert_null_replacements (v1.0.6)
+nullmd = ('Le serveur ~~DL380~~ **[N/A](https://x.fr "t")** coute '
+          '~~3 500 EUR~~ **[MàJ](https://y.fr "t")** et la garantie ~~3 ans~~ **[indisponible](https://z.fr "t")**.')
+fixed = mod._revert_null_replacements(nullmd)
+check("N/A/MàJ/indisponible annules (mot d origine restaure)",
+      fixed == "Le serveur DL380 coute 3 500 EUR et la garantie 3 ans.")
+check("vraie valeur conservee",
+      mod._revert_null_replacements("sorti en ~~2012~~ **[2017](https://hpe.com \"HPE\")**")
+      == "sorti en ~~2012~~ **[2017](https://hpe.com \"HPE\")**")
+check("gras vide annule", mod._revert_null_replacements("texte ~~Qwen3.5~~** ") == "texte Qwen3.5")
+check("gras pendant fin de ligne annule", mod._revert_null_replacements("fin ~~X~~**\nsuite") == "fin X\nsuite")
 
 # ---------------------------------------------------------------- valves
 check("valves max_searches défaut 6", mod.Action().Valves.model_fields["max_searches"].default == 6)
