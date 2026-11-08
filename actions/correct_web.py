@@ -1,7 +1,7 @@
 """
 title: Corriger sur le web
 author: lyesrock
-version: 1.0.0
+version: 1.0.3
 description: Recherche le web en arrière-plan puis corrige la réponse cliquée EN PLACE (aucun rapport, aucun nouveau message) ; chaque correction est marquée ~~erreur~~ [corrigé](url "source")
 required_open_webui_version: 0.13.0
 license: MIT
@@ -226,17 +226,26 @@ def _build_instruction(valves, web_search_on: bool, target_excerpt: str) -> str:
         "2. Repère les AFFIRMATIONS FACTUELLES FAUSSES de cette réponse (chiffres, dates, noms, événements, "
         "références produits, causalités) et tranche-les par la recherche web. Une réponse sans erreur "
         "factuelle est un résultat normal : ne cherche pas à tout prix.\n"
+        "   PÉRIMÈTRE STRICT — tu ne corrigis que des faits SUR LE MONDE EXTÉRIEUR. NE corrige JAMAIS : "
+        "les phrases qui parlent de l'assistant lui-même (ses outils, ses capacités, ses limites, son "
+        "environnement, ce qu'il peut ou ne peut pas faire) ; les opinions, conseils et tournures. "
+        "Si la réponse dit « je n'ai pas d'outil de recherche web » ou « je n'ai pas accès à internet », "
+        "NE TOUCHE PAS À CETTE PHRASE, même si toi tu disposes d'outils de recherche : ces phrases sont "
+        "HORS SUJET et ne sont pas des erreurs.\n"
         "3. Marque CHAQUE correction exactement ainsi :\n"
-        "   ~~séquence erronée~~ [séquence corrigée](URL \"titre de la source\")\n"
+        "   ~~séquence erronée~~ **[séquence corrigée](URL \"titre de la source\")**\n"
+        "   (le double tilde barre la faute, le gras rend le remplacement immédiatement repérable)\n"
         "   - barre UNIQUEMENT les mots faux : 1 à 8 mots, jamais une phrase ou une ligne entière ;\n"
-        "   - le lien markdown ne contient QUE les mots de remplacement, et pointe vers la source "
-        "qui l'établit — l'URL et le titre viennent D'UNE RECHERCHE RÉELLEMENT effectuée, jamais "
-        "de ton souvenir ;\n"
+        "   - le lien markdown ne contient QUE les mots de remplacement, et pointe vers la page qui "
+        "établit le fait — une URL de page de résultats de recherche (contenant « ?q= », « /search » ou "
+        "semblable) est INTERDITE comme source ;\n"
+        "   - si la source citée contredit aussi un autre mot de la phrase (un acteur, un lieu, une "
+        "quantité), barre-LE aussi : corrige TOUS les mots faux d'une même phrase, pas seulement le premier ;\n"
         "   - tout le reste de la phrase reste DEBOUT, mot pour mot.\n"
         "   EXACTE (un seul mot barré) : « Le ProLiant DL380 Gen10 est sorti en ~~2012~~ "
-        "[2017](https://exemple.fr/hpe \"HPE ProLiant Gen10\") » —\n"
-        "   INTERDIT (phrase entière barrée) : « ~~Le ProLiant DL380 Gen10 est sorti en 2012~~ "
-        "[Le ProLiant DL380 Gen10 est sorti en 2017](https://exemple.fr/hpe \\\"HPE\\\") ».\n"
+        "**[2017](https://exemple.fr/hpe \"HPE ProLiant Gen10\")** » —\n"
+        "   INTERDITE (phrase entière barrée) : « ~~Le ProLiant DL380 Gen10 est sorti en 2012~~ "
+        "**[Le ProLiant DL380 Gen10 est sorti en 2017](https://exemple.fr/hpe \\\"HPE\\\")** ».\n"
         "4. Si rien n'est faux (ou non tranchable), retourne le texte mot pour mot, sans un caractère de plus.\n"
         "5. SORTIE STRICTE : uniquement le texte corrigé. Aucun préambule, aucun titre, aucune section, "
         "aucune liste de corrections, aucune remarque finale. Tout balisage HTML autre que ~~…~~ et les "
@@ -442,6 +451,27 @@ def _strip_fences(text: str) -> str:
     return _FENCE_RE.sub("", text).strip()
 
 
+_SEG_RE = re.compile(r"~~([^~\n]{1,160})~~\s*(?:\*\*)?\[[^\]\n]{1,160}\]\([^)\n]{1,240}\)(?:\*\*)?")
+_SELF_TOPIC_RE = re.compile(
+    r"\b(outils?\s+de\s+recherche|outils?|accès|connect|capacit|modèle|intelligence artificielle)\b",
+    re.IGNORECASE,
+)
+
+
+def _strip_self_corrections(md: str) -> str:
+    """Sanitizer déterministe : une correction dont le segment barré parle de l'assistant
+    lui-même (ses outils, son accès, ses capacités) est ALWAYS retirée — le texte
+    d'origine est restauré à cet endroit — même si la consigne a été ignorée. Le modèle
+    « corrige » spontanément « je n'ai pas d'outil de recherche » en croyant bien faire :
+    c'est hors sujet et faux du point de vue de la réponse d'origine."""
+    def _restore(m):
+        if _SELF_TOPIC_RE.search(m.group(1)):
+            return m.group(1)
+        return m.group(0)
+
+    return _SEG_RE.sub(_restore, md)
+
+
 def _word_overlap(original: str, corrected: str) -> float:
     """Fraction des mots d'origine qui subsistent dans le texte corrigé
     (insensible à l'ordre, robuste aux corrections ponctuelles)."""
@@ -512,6 +542,7 @@ async def _correct_in_place(request, model_id, chain, instruction, web_search_on
         progress.cancel()
 
     duration = round(time.monotonic() - started, 1)
+    corrected = _strip_self_corrections(corrected)
     original = str(chain[-1].get("content") or "") if chain else ""
     verdict, detail = _validate_correction(original, corrected)
 
@@ -730,6 +761,7 @@ class Action:
             progress.cancel()
 
         duration = round(time.monotonic() - started, 1)
+        corrected = _strip_self_corrections(corrected)
         verdict, detail = _validate_correction(full_content, corrected)
         if verdict == "unchanged":
             await _log(emitter=__event_emitter__, message=f"Terminée en {duration} s : aucune erreur détectée — texte inchangé.")

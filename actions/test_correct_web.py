@@ -1,4 +1,4 @@
-﻿"""Tests unitaires de l'Action « Corriger sur le web » (logique pure, sans réseau).
+"""Tests unitaires de l'Action « Corriger sur le web » (logique pure, sans réseau).
 
 Lancement : python test_correct_web.py
 """
@@ -76,7 +76,9 @@ class VL(V):
 instr = mod._build_instruction(V(), True, "extrait du sujet à corriger")
 check("budget plafond dur présent", "plafond dur" in instr and "6 appels" in instr)
 check("règle d'arrêt présente", "ARRÊT OBLIGATOIRE" in instr)
-check("format de balisage exact", "~~séquence erronée~~ [séquence corrigée](URL \"titre de la source\")" in instr)
+check("format de balisage exact", "~~séquence erronée~~ **[séquence corrigée](URL \"titre de la source\")**" in instr)
+check("interdiction auto-correction (capacités de l'assistant)", "NE corrige JAMAIS" in instr and "ses outils" in instr)
+check("interdiction liens pages de résultats", "?q=" in instr)
 check("cible = dernière réponse rejouée", "TA DERNIÈRE RÉPONSE" in instr)
 check("extrait sujet injecté", "extrait du sujet à corriger" in instr)
 check("sortie stricte sans rapport", "Aucun préambule, aucun titre" in instr)
@@ -134,6 +136,19 @@ v, reason = mod._validate_correction(orig, long_add)
 check("texte gonflé de commentaires -> reject", v == "reject" and "long" in reason)
 
 check("fences supprimées", mod._strip_fences("```markdown\nbonjour\n```") == "bonjour")
+
+# ---------------------------------------------------------------- _strip_self_corrections
+selfmd = ("Voici un point.\n"
+          "Je n'ai ~~pas d'outil de recherche web~~ **[des outils de recherche web]"
+          "(https://duckduckgo.com/?q=x \"Recherche Web\")** dans cet environnement.\n"
+          "Le serveur est sorti en ~~2012~~ **[2017](https://hpe.com \"HPE\")**.")
+stripped = mod._strip_self_corrections(selfmd)
+check("auto-correction restauree (texte d'origine)", "~~pas d'outil" not in stripped
+      and "Je n'ai pas d'outil de recherche web dans cet environnement." in stripped)
+check("vraie correction preservee", "~~2012~~ **[2017](https://hpe.com \"HPE\")**" in stripped)
+_orig3 = "Voici un point.\nJe n'ai pas d'outil de recherche web dans cet environnement.\nLe serveur est sorti en 2012."
+v, n = mod._validate_correction(_orig3, stripped)
+check("validate apres sanitizer : 1 seule correction", v == "update" and n == 1)
 check(" chevauchement de mots identique", mod._word_overlap(orig, orig) == 1.0)
 check("chevauchement de mots divergent", mod._word_overlap(orig, "autre chose totalement différente du tout") < 0.3)
 

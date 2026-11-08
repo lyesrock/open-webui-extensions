@@ -3,7 +3,7 @@
 One-click **silent correction** of any assistant answer, using **your instance's own web
 search**. Unlike a fact-check report, nothing is appended and no new message is created:
 the clicked answer is **replaced in place** — each factual error becomes
-`~~wrong~~ [corrected](source-url)` right inside the original text. Readers never see
+`~~wrong~~ **[corrected](source-url)**` right inside the original text. Readers never see
 that a correction pass happened (and the strikethrough makes the change transparent).
 
 ## ✨ Features
@@ -16,8 +16,13 @@ that a correction pass happened (and the strikethrough makes the change transpar
   replays the exact message chain up to the clicked answer (cut at the target, later
   turns excluded) — the inference server reuses the original prefix cache
 - 🖊 **Minimal, sourced diffs**: only the wrong words (1–8) are struck through; the
-  replacement is a markdown link to a URL *actually returned by a search* (never from
-  the model's memory), so the corrected word itself is clickable evidence
+  replacement is **bold** and is a markdown link to a *content page* that proves it
+  (search-results pages like `…?q=…` are forbidden, and the model's memory is never a
+  source). If a sentence contains several wrong words (an actor AND a date), all are fixed
+- 🚫 **The assistant is out of scope**: statements about the assistant itself (its tools,
+  access, capabilities) are never "corrected" — enforced by the prompt AND by a
+  deterministic server-side sanitizer that restores the original wording if the model
+  disobeys
 - 🛑 **Bounded cost**: `max_searches` hard ceiling, explicit stop rules, `fetch_url`
   discouraged — no runaway tool loops
 - 🧯 **Trust-verified output**: before writing anything back, the action validates the
@@ -83,6 +88,8 @@ Prerequisites:
 - **Model strikes whole sentences** → instruction forbids it with an explicit
   good/bad example; guards measure *visible* text so legitimate markup length never
   false-triggers
+- **Model "corrects" the assistant's own tools/capabilities** → the sanitizer strips
+  that segment and restores the original wording before anything is written
 - **Update write fails** (network, permissions) → corrected text discarded, original
   kept; error toast
 - **Temporary chats** → front-end merge contract fallback (undoable)

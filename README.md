@@ -35,7 +35,7 @@ Full documentation: [actions/factcheck_web.md](actions/factcheck_web.md)
 
 Adds a **Correct on the web** button under every assistant message. One click searches
 the web **in the background** (nothing is added to the conversation) and then **replaces
-the answer in place**: each factual error becomes `~~wrong~~ [corrected](source-url)`
+the answer in place**: each factual error becomes `~~wrong~~ **[corrected](source-url)**`
 inside the original text — the corrected word itself links to the source that proves it.
 No report, no new message; the UI updates live via the backend's message event.
 
