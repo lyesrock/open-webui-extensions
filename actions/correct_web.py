@@ -1,7 +1,7 @@
 """
 title: Corriger sur le web
 author: lyesrock
-version: 1.0.3
+version: 1.0.4
 description: Recherche le web en arrière-plan puis corrige la réponse cliquée EN PLACE (aucun rapport, aucun nouveau message) ; chaque correction est marquée ~~erreur~~ [corrigé](url "source")
 required_open_webui_version: 0.13.0
 license: MIT
@@ -33,7 +33,8 @@ _PENDING_TASKS = set()
 _MIN_RATIO = 0.6     # en dessous : le modèle a résumé au lieu de reproduire
 _MAX_RATIO = 1.5     # au-dessus : le modèle a ajouté du commentaire (rapport déguisé)
 _MIN_OVERLAP = 0.55  # fraction des mots d'origine devant subsister dans le texte corrigé
-_IDENTICAL_BAND = (0.92, 1.08)  # sans aucune marqueur ~~, ratio dans cette bande = verbatim
+_IDENTICAL_BAND = (0.92, 1.08)  # sans aucun marqueur ~~, ratio dans cette bande = verbatim
+_RELAXED_BAND = (0.5, 1.6)      # sans marqueur, reproduction fidèle même reformulée à la marge
 
 
 async def _emit(emitter, payload):
@@ -496,9 +497,14 @@ def _validate_correction(original: str, corrected: str):
     ratio = len(corrected) / max(1, len(original))
 
     if n_corr == 0:
-        if _IDENTICAL_BAND[0] <= ratio <= _IDENTICAL_BAND[1] and _word_overlap(original, corrected) >= 0.9:
-            return "unchanged", None
-        return "reject", "aucune correction marquée et le texte n'est pas reproduit à l'identique"
+        overlap0 = _word_overlap(original, corrected)
+        # Aucune marqueur de correction : rien ne sera écrit de toute façon. Cas fréquent :
+        # le modèle tentait de corriger des phrases sur l'assistant (retirées par le sanitizer)
+        # ou reformule à la marge. Tant que la sortie reste une reproduction fidèle, c'est
+        # "rien à corriger" (info), pas un rejet gardé-fou (qui inquiète pour rien).
+        if _RELAXED_BAND[0] <= ratio <= _RELAXED_BAND[1] and overlap0 >= 0.75:
+            return "unchanged", "reformule" if (overlap0 < 0.99 or not (_IDENTICAL_BAND[0] <= ratio <= _IDENTICAL_BAND[1])) else None
+        return "reject", "aucune correction marquée et sortie dérivant du texte d'origine"
 
     if corrected.lstrip().startswith("## "):
         return "reject", "le modèle a produit un rapport (titre '##') au lieu du texte corrigé"
@@ -547,7 +553,8 @@ async def _correct_in_place(request, model_id, chain, instruction, web_search_on
     verdict, detail = _validate_correction(original, corrected)
 
     if verdict == "unchanged":
-        await _log(emitter, f"Terminée en {duration} s : aucune erreur factuelle détectée — texte inchangé.")
+        note = " (le modèle a reformulé à la marge sans corriger aucune faute)" if detail == "reformule" else ""
+        await _log(emitter, f"Terminée en {duration} s : aucune erreur factuelle détectée — texte conservé.{note}")
         await _emit(emitter, {"type": "status", "data": {"description": "Aucune erreur détectée.", "done": True}})
         await _toast(emitter, "info", "Aucune erreur factuelle détectée — la réponse est restée inchangée.")
         return None

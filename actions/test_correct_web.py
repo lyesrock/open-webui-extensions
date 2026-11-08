@@ -1,6 +1,6 @@
-"""Tests unitaires de l'Action « Corriger sur le web » (logique pure, sans réseau).
+﻿"""Tests unitaires de l'Action « Corriger sur le web » (logique pure, sans réseau).
 
-Lancement : python test_correct_web.py
+Lancement : python test_correctweb.py
 """
 
 import importlib.util
@@ -8,9 +8,9 @@ import os
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-MODULE_PATH = os.path.join(HERE, "correct_web.py")
+MODULE_PATH = os.path.join(HERE, "correctweb_action.py")
 
-spec = importlib.util.spec_from_file_location("correct_web", MODULE_PATH)
+spec = importlib.util.spec_from_file_location("correctweb_action", MODULE_PATH)
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
 
@@ -136,6 +136,16 @@ v, reason = mod._validate_correction(orig, long_add)
 check("texte gonflé de commentaires -> reject", v == "reject" and "long" in reason)
 
 check("fences supprimées", mod._strip_fences("```markdown\nbonjour\n```") == "bonjour")
+
+reworded = orig.replace(
+    "Le serveur HPE ProLiant DL380 Gen10 sort en 2017 avec les processeurs Scalable",
+    "Le serveur HPE ProLiant DL380 Gen10 est commercialisé à partir de 2017 et embarque les processeurs Scalable Intel",
+)
+v, detail = mod._validate_correction(orig, reworded)
+check("reformulation sans marqueur -> unchanged (pas un faux rejet)", v == "unchanged" and detail == "reformule")
+
+v, reason = mod._validate_correction(orig, "Autre contenu entièrement différent, hors sujet.")
+check("sans marqueur et dérive totale -> reject", v == "reject" and "dériv" in reason)
 
 # ---------------------------------------------------------------- _strip_self_corrections
 selfmd = ("Voici un point.\n"
