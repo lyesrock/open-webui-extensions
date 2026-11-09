@@ -1,7 +1,7 @@
 """
 title: Corriger sur le web
 author: lyesrock
-version: 1.0.7
+version: 1.0.8
 description: Recherche le web en arrière-plan puis corrige la réponse cliquée EN PLACE (aucun rapport, aucun nouveau message) ; chaque correction est marquée ~~erreur~~ [corrigé](url "source")
 required_open_webui_version: 0.13.0
 license: MIT
@@ -441,6 +441,59 @@ async def _update_chat_message(request, chat_id: str, message_id: str, content: 
                 raise RuntimeError(f"POST update HTTP {response.status} : {raw[:200]}")
 
 
+def _patch_output_message(output, content):
+    """0.13 : quand une réponse a un timeline `output` (blocs function_call + message
+    final), le FRONT REND CE TIMELINE, pas la colonne `content` (vérifié DOM + API).
+    Sans sync du bloc `message` final, la correction écrite dans `content` reste
+    INVISIBLE même après rechargement. Pur → testable. Retourne (output, changed)."""
+    if not isinstance(output, list) or not output:
+        return output, False
+    changed = False
+    for block in output:
+        if isinstance(block, dict) and block.get("type") == "message":
+            block["content"] = [{"type": "output_text", "text": content}]
+            changed = True
+    return output, changed
+
+
+async def _sync_output_and_broadcast(chat_id: str, message_id: str, content: str):
+    """Applique le bloc `message` final du timeline `output` au contenu corrigé — dans
+    le JSON history ET la ligne chat_message (upsert ORM, même transaction) — puis
+    diffuse `chat:messages` (salle chat:{id}, shared=True ; socket/main.py l.1657-1716)
+    pour que l'onglet ouvert fusionne le message via mergeChatMessages → mise à jour
+    LIVE du timeline, sans rechargement. Best effort : toute exception remonte à
+    l'appelant qui loggue ; l'écriture `content` est déjà faite."""
+    from open_webui.models.chats import Chats
+    from open_webui.socket.main import get_event_emitter
+
+    chat = await Chats.get_chat_by_id(chat_id)
+    if not chat:
+        return False
+    history = (chat.chat or {}).get("history") or {}
+    msg = (history.get("messages") or {}).get(message_id)
+    if not msg:
+        return False
+    patched, changed = _patch_output_message(msg.get("output"), content)
+    if not changed:
+        return False
+    msg["output"] = patched
+    await Chats.upsert_message_to_chat_by_id_and_message_id(chat_id, message_id, {"output": patched})
+    try:
+        emitter = await get_event_emitter(
+            {"user_id": chat.user_id, "chat_id": chat_id, "message_id": message_id}, False
+        )
+        if emitter:
+            await emitter(
+                {
+                    "type": "chat:messages",
+                    "data": {"messages": {message_id: msg}, "currentId": history.get("currentId")},
+                }
+            )
+    except Exception:
+        log.exception("correct-web: broadcast chat:messages echoue — un rechargement affichera la correction")
+    return True
+
+
 _FENCE_RE = re.compile(r"^```[a-zA-Z0-9_-]*\n?|\n?```\s*$")
 _LINK_RE = re.compile(r"\[([^\]]*)\]\([^)]*\)")
 _DEL_RE = re.compile(r"~~.*?~~", re.DOTALL)
@@ -616,6 +669,16 @@ async def _correct_in_place(request, model_id, chain, instruction, web_search_on
         await _emit(emitter, {"type": "status", "data": {"description": "Échec de la mise à jour — détail dans les logs.", "done": True}})
         await _toast(emitter, "error", "Correction calculée mais non écrite — texte d'origine conservé.")
         return None
+
+    try:
+        synced = await _sync_output_and_broadcast(chat_id, message_id, _strip_fences(corrected))
+    except Exception:
+        log.exception("correct-web: sync du timeline output / broadcast chat:messages echoue")
+        synced = False
+    if not synced:
+        # Message sans timeline (génération sans outils) : `content` suffit, l'event
+        # 'chat:message' du POST a déjà mis l'UI à jour.
+        log.info("correct-web: pas de timeline output a sync (message sans outils) — content seul")
 
     await _log(emitter, f"Correction appliquée en {duration} s ({detail} erreur(s) corrigée(s), en place).")
     await _emit(emitter, {"type": "status", "data": {"description": "Réponse corrigée en place.", "done": True}})

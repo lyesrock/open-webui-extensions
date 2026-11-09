@@ -188,6 +188,27 @@ check("flèche pas doublée",
 check("quantite avec espace numerique aussi",
       '[→ 15 000](' in mod._arrow_numeric_links('~~7 200~~ **[15 000](https://x.fr "t")**'))
 
+# ---------------------------------------------------------------- _patch_output_message (v1.0.8)
+_out = [
+    {"type": "function_call", "name": "search_web"},
+    {"type": "function_call_output", "output": "..."},
+    {"type": "message", "role": "assistant",
+     "content": [{"type": "output_text", "text": "texte d'origine"}]},
+]
+patched, changed = mod._patch_output_message(_out, "~~2015~~ **[→ 2021](https://x.fr)")
+check("sync timeline remplace le bloc message final", changed)
+check("nouveau texte present",
+      patched[-1]["content"][0]["text"] == "~~2015~~ **[→ 2021](https://x.fr)")
+check("blocs outils conserves", patched[0]["type"] == "function_call" and patched[1]["type"] == "function_call_output")
+check("output absent = pas de changement", mod._patch_output_message(None, "x") == (None, False))
+check("output vide = pas de changement", mod._patch_output_message([], "x") == ([], False))
+check("timeline sans bloc message = pas de changement",
+      mod._patch_output_message([{"type": "function_call"}], "x") == ([{"type": "function_call"}], False))
+_multi = [{"type": "message", "content": [{"type": "output_text", "text": "a"}]},
+          {"type": "message", "content": [{"type": "output_text", "text": "b"}]}]
+m2, c2 = mod._patch_output_message(_multi, "corrige")
+check("plusieurs blocs message sync aussi", c2 and m2[0]["content"][0]["text"] == "corrige" and m2[1]["content"][0]["text"] == "corrige")
+
 # ---------------------------------------------------------------- valves
 check("valves max_searches défaut 6", mod.Action().Valves.model_fields["max_searches"].default == 6)
 check("valves strict_search défaut True", mod.Action().Valves.model_fields["strict_search"].default is True)
