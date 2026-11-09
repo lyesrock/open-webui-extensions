@@ -1,7 +1,7 @@
 """
 title: Corriger sur le web
 author: lyesrock
-version: 1.0.6
+version: 1.0.7
 description: Recherche le web en arrière-plan puis corrige la réponse cliquée EN PLACE (aucun rapport, aucun nouveau message) ; chaque correction est marquée ~~erreur~~ [corrigé](url "source")
 required_open_webui_version: 0.13.0
 license: MIT
@@ -250,6 +250,9 @@ def _build_instruction(valves, web_search_on: bool, target_excerpt: str) -> str:
         "   - le remplacement doit être une VALEUR CONCRÈTE énoncée par la source : remplacer par "
         "« N/A », « MàJ », « inconnu », « indisponible » ou vide est INTERDIT — si la source ne "
         "donne pas clairement une valeur différente, LAISSE le texte tel quel ;\n"
+        "   - quand le remplacement est un NOMBRE SEUL (année, quantité), écris le texte du lien "
+        "avec une flèche : **[→ 2021](URL \"titre\")** — sans la flèche, Open WebUI interprète "
+        "« [2021] » comme une note de bas de page et le lien est détruit à l'affichage ;\n"
         "4. Si rien n'est faux (ou non tranchable), retourne le texte mot pour mot, sans un caractère de plus.\n"
         "5. SORTIE STRICTE : uniquement le texte corrigé. Aucun préambule, aucun titre, aucune section, "
         "aucune liste de corrections, aucune remarque finale. Tout balisage HTML autre que ~~…~~ et les "
@@ -503,6 +506,16 @@ def _revert_null_replacements(md: str) -> str:
     return md
 
 
+_NUMERIC_LINK_TEXT_RE = re.compile(r"(\*\*)\[(\d[\d\s.,\u00a0\u202f]*)\]\(")
+
+
+def _arrow_numeric_links(md: str) -> str:
+    """L'extension « citation » d'Open WebUI capture tout [texte](url) dont le texte est
+    purement numérique (« [2021] ») et le rend en note — le lien est détruit à l'affichage.
+    Préfixer le texte par « → » empêche la capture de citation sans changer le sens."""
+    return _NUMERIC_LINK_TEXT_RE.sub(r"\1[→ \2](", md)
+
+
 def _word_overlap(original: str, corrected: str) -> float:
     """Fraction des mots d'origine qui subsistent dans le texte corrigé
     (insensible à l'ordre, robuste aux corrections ponctuelles)."""
@@ -578,7 +591,7 @@ async def _correct_in_place(request, model_id, chain, instruction, web_search_on
         progress.cancel()
 
     duration = round(time.monotonic() - started, 1)
-    corrected = _strip_self_corrections(_revert_null_replacements(corrected))
+    corrected = _strip_self_corrections(_revert_null_replacements(_arrow_numeric_links(corrected)))
     original = str(chain[-1].get("content") or "") if chain else ""
     verdict, detail = _validate_correction(original, corrected)
 
@@ -799,7 +812,7 @@ class Action:
             progress.cancel()
 
         duration = round(time.monotonic() - started, 1)
-        corrected = _strip_self_corrections(_revert_null_replacements(corrected))
+        corrected = _strip_self_corrections(_revert_null_replacements(_arrow_numeric_links(corrected)))
         verdict, detail = _validate_correction(full_content, corrected)
         if verdict == "unchanged":
             await _log(emitter=__event_emitter__, message=f"Terminée en {duration} s : aucune erreur à corriger — texte inchangé.")

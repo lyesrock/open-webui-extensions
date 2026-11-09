@@ -175,6 +175,19 @@ check("vraie valeur conservee",
 check("gras vide annule", mod._revert_null_replacements("texte ~~Qwen3.5~~** ") == "texte Qwen3.5")
 check("gras pendant fin de ligne annule", mod._revert_null_replacements("fin ~~X~~**\nsuite") == "fin X\nsuite")
 
+# ---------------------------------------------------------------- _arrow_numeric_links (v1.0.7)
+check("lien numerique fleche ajoutee",
+      mod._arrow_numeric_links('sorti en ~~2012~~ **[2017](https://hpe.com "HPE")**')
+      == 'sorti en ~~2012~~ **[→ 2017](https://hpe.com "HPE")**')
+check("lien non numerique intact",
+      mod._arrow_numeric_links('~~fermé~~ **[poids ouverts](https://x.fr "t")**')
+      == '~~fermé~~ **[poids ouverts](https://x.fr "t")**')
+check("flèche pas doublée",
+      mod._arrow_numeric_links('~~2012~~ **[→ 2017](https://hpe.com "HPE")**')
+      == '~~2012~~ **[→ 2017](https://hpe.com "HPE")**')
+check("quantite avec espace numerique aussi",
+      '[→ 15 000](' in mod._arrow_numeric_links('~~7 200~~ **[15 000](https://x.fr "t")**'))
+
 # ---------------------------------------------------------------- valves
 check("valves max_searches défaut 6", mod.Action().Valves.model_fields["max_searches"].default == 6)
 check("valves strict_search défaut True", mod.Action().Valves.model_fields["strict_search"].default is True)
