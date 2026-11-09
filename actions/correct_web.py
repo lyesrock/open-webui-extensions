@@ -1,8 +1,8 @@
 """
 title: Corriger sur le web
 author: lyesrock
-version: 1.0.8
-description: Recherche le web en arrière-plan puis corrige la réponse cliquée EN PLACE (aucun rapport, aucun nouveau message) ; chaque correction est marquée ~~erreur~~ [corrigé](url "source")
+version: 1.1.0
+description: Recherche le web en arrière-plan puis corrige la réponse cliquée EN PLACE (aucun rapport, aucun nouveau message) ; le texte faux est SUPPRIMÉ et le remplacement marqué **[corrigé](url "Corrigé : faux")** (surligné jaune à l'affichage)
 required_open_webui_version: 0.13.0
 license: MIT
 """
@@ -174,6 +174,77 @@ async def _web_search_readiness(request, model_id: str, search_mode: str):
     return searchable, blocking
 
 
+_REGLE_SOURCE = (
+    "   - le lien markdown ne contient QUE les mots de remplacement, et pointe vers la page qui "
+    "établit le fait — une URL de page de résultats de recherche (contenant « ?q= », « /search » ou "
+    "semblable) est INTERDITE comme source ;\n"
+)
+_REGLE_VALEUR = (
+    "   - le remplacement doit être une VALEUR CONCRÈTE énoncée par la source : remplacer par "
+    "« N/A », « MàJ », « inconnu », « indisponible » ou vide est INTERDIT — si la source ne "
+    "donne pas clairement une valeur différente, LAISSE le texte tel quel ;\n"
+)
+
+
+def _correction_rules(display: str):
+    """(règle 3 complète, règle 5 sortie stricte) selon le style d'affichage de la valve
+    correction_display. Le pipeline interne (sanitizeurs, validation) accepte et ramène de
+    toute façon les DEUX formats : cette consigne ne fait que demander le style choisi."""
+    if display == "strikethrough":
+        regle3 = (
+            "3. Marque CHAQUE correction exactement ainsi :\n"
+            "   ~~séquence erronée~~ **[séquence corrigée](URL \"titre de la source\")**\n"
+            "   (le double tilde barre la faute, le gras rend le remplacement immédiatement repérable)\n"
+            "   - barre UNIQUEMENT les mots faux : 1 à 8 mots, jamais une phrase ou une ligne entière ;\n"
+            + _REGLE_SOURCE +
+            "   - si la source citée contredit aussi un autre mot de la phrase (un acteur, un lieu, une "
+            "quantité), barre-LE aussi : corrige TOUS les mots faux d'une même phrase, pas seulement le premier ;\n"
+            "   - tout le reste de la phrase reste DEBOUT, mot pour mot.\n"
+            "   EXACTE (un seul mot barré) : « Le ProLiant DL380 Gen10 est sorti en ~~2012~~ "
+            "**[→ 2017](https://exemple.fr/hpe \"HPE ProLiant Gen10\") » —\n"
+            "   INTERDITE (phrase entière barrée) : « ~~Le ProLiant DL380 Gen10 est sorti en 2012~~ "
+            "**[Le ProLiant DL380 Gen10 est sorti en 2017](https://exemple.fr/hpe \\\"HPE\\\") ».\n"
+            + _REGLE_VALEUR +
+            "   - quand le remplacement est un NOMBRE SEUL (année, quantité), écris le texte du lien "
+            "avec une flèche : **[→ 2021](URL \"titre\")** — sans la flèche, Open WebUI interprète "
+            "« [2021] » comme une note de bas de page et le lien est détruit à l'affichage ;\n"
+        )
+        regle5 = (
+            "5. SORTIE STRICTE : uniquement le texte corrigé. Aucun préambule, aucun titre, aucune section, "
+            "aucune liste de corrections, aucune remarque finale. Tout balisage HTML autre que ~~…~~ et les "
+            "liens markdown serait affiché en texte brut — n'en emploie aucun.\n"
+        )
+    else:
+        regle3 = (
+            "3. Corrige CHAQUE erreur EN PLACE : SUPPRIME TOTALEMENT les mots faux (1 à 8 mots, jamais "
+            "une phrase ou une ligne entière) et écris à leur place le remplacement exactement ainsi :\n"
+            "   **[séquence corrigée](URL \"Corrigé : séquence erronée\")**\n"
+            "   (les mots erronés ne doivent PLUS APPARAÎTRE dans le texte — ils ne survivent que dans le "
+            "titre du lien, après « Corrigé : » ; le texte barré est INTERDIT — n'écris jamais ~~…~~)\n"
+            + _REGLE_SOURCE +
+            "   - le titre du lien commence OBLIGATOIREMENT par « Corrigé : » suivi des mots supprimés "
+            "(sans guillemets à l'intérieur du titre) ;\n"
+            "   - si la source citée contredit aussi un autre mot de la phrase (un acteur, un lieu, une "
+            "quantité), supprime-LE aussi et remplace-le de la même façon : corrige TOUS les mots faux "
+            "d'une même phrase, pas seulement le premier ;\n"
+            "   - tout le reste de la phrase reste DEBOUT, mot pour mot.\n"
+            "   EXACTE (un seul mot remplacé) : « Le ProLiant DL380 Gen10 est sorti en "
+            "**[→ 2017](https://exemple.fr/hpe \"Corrigé : 2012\") » —\n"
+            "   INTERDITE (phrase entière remplacée) : « **[Le ProLiant DL380 Gen10 est sorti en 2017]"
+            "(https://exemple.fr/hpe \"Corrigé : Le ProLiant DL380 Gen10 est sorti en 2012\") ».\n"
+            + _REGLE_VALEUR +
+            "   - quand le remplacement est un NOMBRE SEUL (année, quantité), écris le texte du lien "
+            "avec une flèche : **[→ 2021](URL \"Corrigé : valeur fausse\")** — sans la flèche, Open WebUI "
+            "interprète « [2021] » comme une note de bas de page et le lien est détruit à l'affichage ;\n"
+        )
+        regle5 = (
+            "5. SORTIE STRICTE : uniquement le texte corrigé. Aucun préambule, aucun titre, aucune section, "
+            "aucune liste de corrections, aucune remarque finale. Tout balisage HTML serait affiché en texte "
+            "brut — n'emploie que le gras ** et les liens markdown ; jamais de ~~barré~~.\n"
+        )
+    return regle3, regle5
+
+
 def _build_instruction(valves, web_search_on: bool, target_excerpt: str) -> str:
     """Consigne de correction ajoutée en fin du préfixe rejoué (invisible pour
     l'utilisateur : complétion NON persistée, jamais insérée dans le chat).
@@ -187,6 +258,7 @@ def _build_instruction(valves, web_search_on: bool, target_excerpt: str) -> str:
         langue = "la même langue que le texte à corriger"
     else:
         langue = "la langue '" + lang + "'"
+    regle3, regle5 = _correction_rules(_resolve_display(valves))
 
     max_s = max(1, valves.max_searches)
     if web_search_on and valves.search_mode == "native":
@@ -233,31 +305,10 @@ def _build_instruction(valves, web_search_on: bool, target_excerpt: str) -> str:
         "Si la réponse dit « je n'ai pas d'outil de recherche web » ou « je n'ai pas accès à internet », "
         "NE TOUCHE PAS À CETTE PHRASE, même si toi tu disposes d'outils de recherche : ces phrases sont "
         "HORS SUJET et ne sont pas des erreurs.\n"
-        "3. Marque CHAQUE correction exactement ainsi :\n"
-        "   ~~séquence erronée~~ **[séquence corrigée](URL \"titre de la source\")**\n"
-        "   (le double tilde barre la faute, le gras rend le remplacement immédiatement repérable)\n"
-        "   - barre UNIQUEMENT les mots faux : 1 à 8 mots, jamais une phrase ou une ligne entière ;\n"
-        "   - le lien markdown ne contient QUE les mots de remplacement, et pointe vers la page qui "
-        "établit le fait — une URL de page de résultats de recherche (contenant « ?q= », « /search » ou "
-        "semblable) est INTERDITE comme source ;\n"
-        "   - si la source citée contredit aussi un autre mot de la phrase (un acteur, un lieu, une "
-        "quantité), barre-LE aussi : corrige TOUS les mots faux d'une même phrase, pas seulement le premier ;\n"
-        "   - tout le reste de la phrase reste DEBOUT, mot pour mot.\n"
-        "   EXACTE (un seul mot barré) : « Le ProLiant DL380 Gen10 est sorti en ~~2012~~ "
-        "**[2017](https://exemple.fr/hpe \"HPE ProLiant Gen10\")** » —\n"
-        "   INTERDITE (phrase entière barrée) : « ~~Le ProLiant DL380 Gen10 est sorti en 2012~~ "
-        "**[Le ProLiant DL380 Gen10 est sorti en 2017](https://exemple.fr/hpe \\\"HPE\\\")** ».\n"
-        "   - le remplacement doit être une VALEUR CONCRÈTE énoncée par la source : remplacer par "
-        "« N/A », « MàJ », « inconnu », « indisponible » ou vide est INTERDIT — si la source ne "
-        "donne pas clairement une valeur différente, LAISSE le texte tel quel ;\n"
-        "   - quand le remplacement est un NOMBRE SEUL (année, quantité), écris le texte du lien "
-        "avec une flèche : **[→ 2021](URL \"titre\")** — sans la flèche, Open WebUI interprète "
-        "« [2021] » comme une note de bas de page et le lien est détruit à l'affichage ;\n"
-        "4. Si rien n'est faux (ou non tranchable), retourne le texte mot pour mot, sans un caractère de plus.\n"
-        "5. SORTIE STRICTE : uniquement le texte corrigé. Aucun préambule, aucun titre, aucune section, "
-        "aucune liste de corrections, aucune remarque finale. Tout balisage HTML autre que ~~…~~ et les "
-        "liens markdown serait affiché en texte brut — n'en emploie aucun.\n"
-        "6. Rédige dans " + langue + ".\n\n"
+        + regle3
+        + "4. Si rien n'est faux (ou non tranchable), retourne le texte mot pour mot, sans un caractère de plus.\n"
+        + regle5
+        + "6. Rédige dans " + langue + ".\n\n"
         "SUJET DE LA CORRECTION (extrait de la réponse à corriger — pour formuler les requêtes de recherche) :\n"
         + target_excerpt
         + "\n\nPÉRIMÈTRE : seule ta dernière réponse est à corriger ; la conversation antérieure ne sert "
@@ -511,51 +562,160 @@ def _strip_fences(text: str) -> str:
     return _FENCE_RE.sub("", text).strip()
 
 
-_SEG_RE = re.compile(r"~~([^~\n]{1,160})~~\s*(?:\*\*)?\[[^\]\n]{1,160}\]\([^)\n]{1,240}\)(?:\*\*)?")
+# v1.1.0 — marqueur de correction : **[valeur](URL "Corrigé : valeur fausse")**.
+# Le texte faux est SUPPRIMÉ du corps (plus de ~~barré~~) ; il ne survit que dans le
+# titre du lien, qui sert de repère au CSS. La COULEUR du surlignage (valve) est un
+# jeton optionnel dans le titre (« Corrigé #orange : … ») : purement cosmétique,
+# ignoré par tous les calculs, jamais imposé au modèle (injecté côté serveur).
+_CORR_LINK_RE = re.compile(
+    r"(?:\*\*)?\[([^\]\n]{1,160})\]\(\s*([^)\s][^)\n]{0,240}?)\s+\"Corrigé(?: #[a-z]+)?\s*:\s*([^\"\n]{1,80})\"\s*\)(?:\*\*)?"
+)
+_LEGACY_SEG_RE = re.compile(
+    r"~~([^~\n]{1,160})~~\s*(?:\*\*)?\[([^\]\n]{1,160})\]\(\s*([^)\n]{1,240}?)\s*\)(?:\*\*)?"
+)
+_TITLE_SRC_RE = re.compile(r"^(\S+)\s+\"([^\"]*)\"$")
+_TITLE_MARKER_RE = re.compile(r"\"[Cc]orrig[ée]?(?: #[a-z]+)?\s*:\s*([^\"\n]{1,80})\"")
+_LEFTOVER_TILDE_RE = re.compile(r"~~([^~\n]{1,160})~~")
+_EMPTY_BOLD_RE = re.compile(r"~~([^~\n]{1,160})~~\s*\*\*\s*\*\*")
+_DANGLING_BOLD_RE = re.compile(r"~~([^~\n]{1,160})~~\s*\*\*[ \t]*$", re.MULTILINE)
+_CITATION_BADGE_RE = re.compile(r"[ \t]?\[\d{1,4}(?:,\s*\d{1,4})*\](?!\()")
+_COLOR_TOKEN_RE = re.compile(r"Corrigé(?: #[a-z]+)?\s*:")
 _SELF_TOPIC_RE = re.compile(
     r"\b(outils?\s+de\s+recherche|outils?|accès|connect|capacit|modèle|intelligence artificielle)\b",
     re.IGNORECASE,
 )
 
 
+def _resolve_display(valves) -> str:
+    """Style d'affichage des corrections (valve correction_display) : 'strikethrough'
+    (ancien ~~barré~~) ou 'replace' (défaut, faux supprimé + corrigé surligné). Tout
+    style inconnu/absent retombe sur 'replace' — robuste aux valves déjà enregistrées."""
+    return "strikethrough" if str(getattr(valves, "correction_display", "")).strip().lower() == "strikethrough" else "replace"
+
+
+_CORRECTION_COLORS = ("jaune", "orange", "vert", "rose", "bleu", "cyan", "aucune")
+
+
+def _resolve_color(valves) -> str:
+    """Couleur de surlignage (valve correction_color) ; 'jaune' = valeur par défaut =
+    aucune injection (la règle CSS de base s'applique déjà)."""
+    color = str(getattr(valves, "correction_color", "")).strip().lower()
+    return color if color in _CORRECTION_COLORS and color != "jaune" else ""
+
+
+def _resolve_keep_citations(valves) -> bool:
+    """Valve show_citations : conserver (défaut) ou retirer les badges de citation
+    web [1][2] du texte corrigé. Absent/ancien dict de valves = True (comportement actuel)."""
+    value = getattr(valves, "show_citations", True)
+    return value is not False
+
+
+def _apply_color(md: str, color: str) -> str:
+    """Injecte le jeton couleur dans le titre de chaque marqueur (« Corrigé #orange : »).
+    Le CSS cible le jeton ; les sanitizers le tolèrent et le normalisent (la couleur est
+    donc re-choisie à chaque nouvelle correction, jamais héritée du texte précédent)."""
+    if not color:
+        return md
+    return _COLOR_TOKEN_RE.sub(f"Corrigé #{color} :", md)
+
+
+def _finalize_render(md: str, valves) -> str:
+    """Rendu final selon les valves d'affichage — appliqué APRÈS validation/sanitization
+    (qui travaillent toujours sur le format canonique interne). Ordre important :
+    style -> couleur -> suppression des badges de citation."""
+    if _resolve_display(valves) == "strikethrough":
+        md = _render_strikethrough(md)
+    md = _apply_color(md, _resolve_color(valves))
+    if not _resolve_keep_citations(valves):
+        md = _CITATION_BADGE_RE.sub("", md)
+    return md
+
+
+def _convert_legacy(md: str) -> str:
+    """ANCIEN format `~~ancien~~ **[nouveau](URL "source")**` -> format canonique interne
+    `**[nouveau](URL "Corrigé : ancien")**`. Quel que soit le style demandé, la détection,
+    le comptage et les sanitizers travaillent TOUJOURS sur le format canonique ; le rendu
+    final est ensuite adapté par la valve (voir _render_strikethrough)."""
+    md = _LEGACY_SEG_RE.sub(_legacy_to_new, md)
+    md = _EMPTY_BOLD_RE.sub(r"\1", md)
+    md = _DANGLING_BOLD_RE.sub(r"\1", md)
+    md = _TITLE_MARKER_RE.sub(lambda m: '"Corrigé : ' + m.group(1) + '"', md)
+    # ~~restant sans lien de correction associe -> texte nu (plus jamais de barre)
+    md = _LEFTOVER_TILDE_RE.sub(r"\1", md)
+    return md
+
+
+def _legacy_to_new(m):
+    old, new, rest = m.group(1), m.group(2), m.group(3).strip()
+    t = _TITLE_SRC_RE.match(rest)
+    if t:
+        title = f"Corrigé : {old} — {t.group(2)}"[:200]
+        return f'**[{new}]({t.group(1)} "{title}")**'
+    return f'**[{new}]({rest} "Corrigé : {old}")**'
+
+
+_CANON_TITLE_SPLIT = " — "
+
+
+def _title_old(title: str) -> str:
+    """Dans un titre canonique « ancien — source », seule la partie « ancien » est le
+    texte d'origine à restaurer quand une correction est annulée par les sanitizers."""
+    return title.partition(_CANON_TITLE_SPLIT)[0].strip()
+
+
+def _render_strikethrough(md: str) -> str:
+    """Rendu valve 'strikethrough' : le marqueur canonique est rejoué en ancien style
+    `~~faux~~ **[corrigé](URL "source")**` — l'information du titre (« Corrigé : faux —
+    source ») est redistribuée barré/titre de lien. Idempotent : sans marqueur canonique,
+    le texte ressort inchangé."""
+
+    def _mk(m):
+        new, url, title = m.group(1), m.group(2), m.group(3)
+        old, _, src = title.partition(_CANON_TITLE_SPLIT)
+        old = old.strip() or "…"
+        src = src.strip().replace('"', "'")
+        link = f'{url} "{src}"' if src else url
+        return f"~~{old}~~ **[{new}]({link})**"
+
+    return _CORR_LINK_RE.sub(_mk, md)
+
+
 def _strip_self_corrections(md: str) -> str:
-    """Sanitizer déterministe : une correction dont le segment barré parle de l'assistant
-    lui-même (ses outils, son accès, ses capacités) est ALWAYS retirée — le texte
-    d'origine est restauré à cet endroit — même si la consigne a été ignorée. Le modèle
-    « corrige » spontanément « je n'ai pas d'outil de recherche » en croyant bien faire :
-    c'est hors sujet et faux du point de vue de la réponse d'origine."""
+    """Sanitizer déterministe : une correction dont le titre « Corrigé : » parle de
+    l'assistant lui-même (ses outils, son accès, ses capacités) est ALWAYS annulée — la
+    séquence d'origine est restaurée. Le modèle « corrige » spontanément « je n'ai pas
+    d'outil de recherche » en croyant bien faire : c'est hors sujet."""
+
     def _restore(m):
-        if _SELF_TOPIC_RE.search(m.group(1)):
-            return m.group(1)
+        if _SELF_TOPIC_RE.search(m.group(3)):
+            return _title_old(m.group(3))
         return m.group(0)
 
-    return _SEG_RE.sub(_restore, md)
+    return _CORR_LINK_RE.sub(_restore, md)
 
 
 _NULL_REPL_RE = re.compile(
     r"^\s*(?:N/?A|M[àa]J|MAJ|inconnu(?:e)?|indisponible|non trouv[ée]s?|-{1,3}|\?+|…|\.)\s*$",
     re.IGNORECASE,
 )
-_LINK_TEXT_RE = re.compile(r"\[([^\]\n]{1,160})\]")
-_EMPTY_BOLD_RE = re.compile(r"~~([^~\n]{1,160})~~\s*\*\*\s*\*\*")
-_DANGLING_BOLD_RE = re.compile(r"~~([^~\n]{1,160})~~\s*\*\*[ \t]*$", re.MULTILINE)
+_EMPTY_MARKER_RE = re.compile(
+    r"(?:\*\*)?\[\s*\]\(\s*[^)\s][^)\n]{0,240}?\s+\"Corrigé(?: #[a-z]+)?\s*:\s*([^\"\n]{1,80})\"\s*\)(?:\*\*)?"
+)
 
 
 def _revert_null_replacements(md: str) -> str:
     """Sanitizer déterministe : une correction dont le remplacement n'apporte AUCUNE
-    information (N/A, MàJ, inconnu, indisponible, vide) est annulée — le mot d'origine
-    est restauré. Empêche les fausses corrections quand la recherche du modèle tombe
-    sur des pages périmées qui ne contredisent rien de façon concrète."""
+    information (N/A, MàJ, inconnu, indisponible, vide) est annulée — le texte d'origine
+    (titre « Corrigé : … ») est restauré. Empêche les fausses corrections quand la
+    recherche du modèle tombe sur des pages périmées qui ne contredisent rien."""
 
     def _restore(m):
-        link = _LINK_TEXT_RE.search(m.group(0))
-        if link and _NULL_REPL_RE.match(link.group(1)):
-            return m.group(1)
+        if _NULL_REPL_RE.match(m.group(1)):
+            return _title_old(m.group(3))
         return m.group(0)
 
-    md = _SEG_RE.sub(_restore, md)
-    md = _EMPTY_BOLD_RE.sub(r"\1", md)
-    md = _DANGLING_BOLD_RE.sub(r"\1", md)
+    md = _CORR_LINK_RE.sub(_restore, md)
+    md = _EMPTY_MARKER_RE.sub(lambda m: _title_old(m.group(1)), md)
     return md
 
 
@@ -585,11 +745,11 @@ def _validate_correction(original: str, corrected: str):
       ("unchanged", None)        → rien à corriger (texte verbatim) ;
       ("reject", raison)         → sortie non fiable, texte d'origine préservé.
     """
-    corrected = _strip_fences(corrected)
+    corrected = _convert_legacy(_strip_fences(corrected))
     if not corrected:
         return "reject", "sortie vide"
 
-    n_corr = corrected.count("~~") // 2
+    n_corr = len(_CORR_LINK_RE.findall(corrected))
     ratio = len(corrected) / max(1, len(original))
 
     if n_corr == 0:
@@ -644,7 +804,7 @@ async def _correct_in_place(request, model_id, chain, instruction, web_search_on
         progress.cancel()
 
     duration = round(time.monotonic() - started, 1)
-    corrected = _strip_self_corrections(_revert_null_replacements(_arrow_numeric_links(corrected)))
+    corrected = _strip_self_corrections(_revert_null_replacements(_arrow_numeric_links(_convert_legacy(corrected))))
     original = str(chain[-1].get("content") or "") if chain else ""
     verdict, detail = _validate_correction(original, corrected)
 
@@ -660,6 +820,8 @@ async def _correct_in_place(request, model_id, chain, instruction, web_search_on
         await _emit(emitter, {"type": "status", "data": {"description": "Correction rejetée (garde-fou) — voir les logs.", "done": True}})
         await _toast(emitter, "warning", "La correction produite a été rejetée par les garde-fous — texte d'origine conservé.")
         return None
+
+    corrected = _finalize_render(corrected, valves)
 
     try:
         await _update_chat_message(request, chat_id, message_id, corrected, valves.base_url)
@@ -688,8 +850,9 @@ async def _correct_in_place(request, model_id, chain, instruction, web_search_on
 
 class Action:
     description: str = (
-        "Recherche le web en arrière-plan puis corrige cette réponse EN PLACE : les passages faux "
-        "deviennent ~~erreur~~ [corrigé](lien source), sans rapport ni nouveau message"
+        "Recherche le web en arrière-plan puis corrige cette réponse EN PLACE : le faux est "
+        "supprimé et le corrigé surligné (ou ~~barré~~ selon la valve correction_display), "
+        "sans rapport ni nouveau message"
     )
 
     class Valves(BaseModel):
@@ -707,6 +870,24 @@ class Action:
             json_schema_extra={"input": {"type": "select", "options": ["native", "legacy"]}},
             description="'native' = outils de recherche pour le modèle (function calling) ; "
             "'legacy' = recherches pré-injectées (modèles sans function calling)",
+        )
+        correction_display: str = Field(
+            default="replace",
+            json_schema_extra={"input": {"type": "select", "options": ["replace", "strikethrough"]}},
+            description="Affichage des corrections : 'replace' = le texte faux est SUPPRIMÉ, le corrigé "
+            "surligné (la faute reste en infobulle) ; 'strikethrough' = ancien style "
+            "~~texte faux~~ [corrigé](lien source), les deux restent surlignés à l'affichage",
+        )
+        correction_color: str = Field(
+            default="jaune",
+            json_schema_extra={"input": {"type": "select", "options": ["jaune", "orange", "vert", "rose", "bleu", "cyan", "aucune"]}},
+            description="Couleur du surlignage des corrections (style 'replace') — appliqué au rendu, "
+            "la palette correspondante est définie dans la feuille de style globale de l'instance",
+        )
+        show_citations: bool = Field(
+            default=True,
+            description="Conserver les badges de citation web [1] [2] dans le texte corrigé "
+            "(décocher pour les retirer de la réponse corrigée)",
         )
         strict_search: bool = Field(
             default=True,
@@ -875,7 +1056,7 @@ class Action:
             progress.cancel()
 
         duration = round(time.monotonic() - started, 1)
-        corrected = _strip_self_corrections(_revert_null_replacements(_arrow_numeric_links(corrected)))
+        corrected = _strip_self_corrections(_revert_null_replacements(_arrow_numeric_links(_convert_legacy(corrected))))
         verdict, detail = _validate_correction(full_content, corrected)
         if verdict == "unchanged":
             await _log(emitter=__event_emitter__, message=f"Terminée en {duration} s : aucune erreur à corriger — texte inchangé.")
@@ -886,6 +1067,7 @@ class Action:
             await _toast(__event_emitter__, "warning", "Correction rejetée par les garde-fous — texte d'origine conservé.")
             return None
 
+        corrected = _finalize_render(corrected, valves)
         await _log(__event_emitter__, f"Correction appliquée en {duration} s ({detail} erreur(s)) — fusion front par id.")
         await _emit(__event_emitter__, {"type": "status", "data": {"description": "Réponse corrigée en place.", "done": True}})
         await _toast(__event_emitter__, "success", f"Réponse corrigée en place — {detail} erreur(s) factuelle(s) corrigée(s).")

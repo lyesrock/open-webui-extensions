@@ -1,4 +1,4 @@
-﻿"""Tests unitaires de l'Action « Corriger sur le web » (logique pure, sans réseau).
+"""Tests unitaires de l'Action « Corriger sur le web » (logique pure, sans réseau).
 
 Lancement : python test_correctweb.py
 """
@@ -8,7 +8,7 @@ import os
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-MODULE_PATH = os.path.join(HERE, "correctweb_action.py")
+MODULE_PATH = os.path.join(HERE, "correct_web.py")
 
 spec = importlib.util.spec_from_file_location("correctweb_action", MODULE_PATH)
 mod = importlib.util.module_from_spec(spec)
@@ -73,10 +73,20 @@ class VL(V):
     search_mode = "legacy"
 
 
+class VD(V):
+    correction_display = "strikethrough"
+
+
 instr = mod._build_instruction(V(), True, "extrait du sujet à corriger")
 check("budget plafond dur présent", "plafond dur" in instr and "6 appels" in instr)
 check("règle d'arrêt présente", "ARRÊT OBLIGATOIRE" in instr)
-check("format de balisage exact", "~~séquence erronée~~ **[séquence corrigée](URL \"titre de la source\")**" in instr)
+check("v1.1.0 : format marqueur demandé", "**[séquence corrigée](URL \"Corrigé : séquence erronée\")**" in instr)
+check("v1.1.0 : suppression du faux exigée, barré interdit", "SUPPRIME TOTALEMENT" in instr and "n'écris jamais ~~…~~" in instr)
+check("par défaut pas d'ancien format demandé", "~~séquence erronée~~" not in instr)
+instr_strike = mod._build_instruction(VD(), True, "sujet")
+check("valve strikethrough : ancien format demandé", "~~séquence erronée~~ **[séquence corrigée](URL \"titre de la source\")**" in instr_strike)
+check("valve strikethrough : pas de consigne marqueur", "Corrigé : séquence erronée" not in instr_strike)
+check("valve inconnu revient à replace", mod._build_instruction(type("X", (V,), {"correction_display": "nimportequoi"})(), True, "sujet").count("Corrigé : séquence erronée") == 1)
 check("interdiction auto-correction (capacités de l'assistant)", "NE corrige JAMAIS" in instr and "ses outils" in instr)
 check("interdiction liens pages de résultats", "?q=" in instr)
 check("cible = dernière réponse rejouée", "TA DERNIÈRE RÉPONSE" in instr)
@@ -91,6 +101,62 @@ check("mode legacy : pas d'outils annoncés", "Tu DISPOSES d'outils" not in inst
 instr_noweb = mod._build_instruction(V(), False, "sujet")
 check("sans web : consigne de non-correction", "ne corrige RIEN" in instr_noweb)
 
+# ---------------------------------------------------------------- _resolve_display
+check("display défaut replace", mod._resolve_display(V()) == "replace")
+check("display valve strikethrough", mod._resolve_display(VD()) == "strikethrough")
+check("display casse/espaces tolérée", mod._resolve_display(type("X", (V,), {"correction_display": "  StrikeThrough "})()) == "strikethrough")
+
+# ---------------------------------------------------------------- couleur + citations (v1.1.0)
+check("couleur défaut jaune = aucune injection", mod._resolve_color(V()) == "")
+check("couleur valve orange", mod._resolve_color(type("X", (V,), {"correction_color": "Orange"})()) == "orange")
+check("couleur inconnue retombe sur jaune", mod._resolve_color(type("X", (V,), {"correction_color": "chartreuse"})()) == "")
+check("couleur aucune injectée", mod._resolve_color(type("X", (V,), {"correction_color": "aucune"})()) == "aucune")
+colored = mod._apply_color('sorti en **[→ 2017](https://hpe.com "Corrigé : 2012")**', "orange")
+check("jeton couleur injecté dans le titre",
+      colored == 'sorti en **[→ 2017](https://hpe.com "Corrigé #orange : 2012")**')
+check("marqueur avec jeton couleur toujours détecté (count)",
+      len(mod._CORR_LINK_RE.findall(colored)) == 1)
+check("jeton couleur normalisé par convert (re-correction propre)",
+      mod._convert_legacy(colored) == 'sorti en **[→ 2017](https://hpe.com "Corrigé : 2012")**')
+check("sanitizer fonctionne sur marqueur coloré",
+      mod._revert_null_replacements('**[N/A](https://x.fr "Corrigé #vert : 3 ans")**') == "3 ans")
+check("badges citation retirés quand show_citations=False",
+      mod._finalize_render('texte [1][2] corrigé **[x](https://a.fr "Corrigé : y")**[3]',
+                           type("X", (V,), {"show_citations": False})())
+      == 'texte corrigé **[x](https://a.fr "Corrigé : y")**')
+check("badges conservés par défaut",
+      'texte [1] corrigé **[x](https://a.fr "Corrigé : y")**'
+      in mod._finalize_render('texte [1] corrigé **[x](https://a.fr "Corrigé : y")**', V()))
+check("lien corrigé numérique Jamais retiré par le strip citation",
+      mod._finalize_render('**[→ 2021](https://x.fr "Corrigé : 2015")**',
+                           type("X", (V,), {"show_citations": False})())
+      .startswith('**[→ 2021]'))
+fin = mod._finalize_render('sorti en **[2017](https://hpe.com "Corrigé : 2012")**',
+                           type("X", (V,), {"correction_display": "strikethrough", "correction_color": "rose"})())
+check("finalize strikethrough = rendu barré", fin == 'sorti en ~~2012~~ **[2017](https://hpe.com)**')
+fin2 = mod._finalize_render('sorti en **[2017](https://hpe.com "Corrigé : 2012")**',
+                            type("X", (V,), {"correction_color": "rose"})())
+check("finalize replace + couleur", fin2 == 'sorti en **[2017](https://hpe.com "Corrigé #rose : 2012")**')
+
+# ---------------------------------------------------------------- _convert_legacy / _render_strikethrough (v1.1.0)
+conv = mod._convert_legacy('sorti en ~~2012~~ **[2017](https://hpe.com "HPE")**')
+check("legacy -> marqueur canonique (titre fusionné)",
+      conv == 'sorti en **[2017](https://hpe.com "Corrigé : 2012 — HPE")**')
+conv2 = mod._convert_legacy('sorti en ~~2012~~ **[2017](https://hpe.com)**')
+check("legacy sans titre source", conv2 == 'sorti en **[2017](https://hpe.com "Corrigé : 2012")**')
+check("titre corrigé minuscule normalisé",
+      mod._convert_legacy('**[x](https://a.fr "corrigé : y")**') == '**[x](https://a.fr "Corrigé : y")**')
+check("tilde orphelin sans lien -> texte nu", mod._convert_legacy("du ~~vrai~~ faux") == "du vrai faux")
+check("gras vide legacy annule", mod._convert_legacy("texte ~~Qwen3.5~~** **\nfin") == "texte Qwen3.5\nfin")
+check("gras pendant fin de ligne annule", mod._convert_legacy("fin ~~X~~**\nsuite") == "fin X\nsuite")
+check("conversion idempotente", mod._convert_legacy(conv) == conv)
+rev = mod._render_strikethrough('sorti en **[2017](https://hpe.com "Corrigé : 2012 — HPE")**')
+check("canonique -> rendu barré", rev == 'sorti en ~~2012~~ **[2017](https://hpe.com "HPE")**')
+rev2 = mod._render_strikethrough('sorti en **[→ 2021](https://x.fr "Corrigé : 2015")**')
+check("rendu barré sans source garde flèche", rev2 == 'sorti en ~~2015~~ **[→ 2021](https://x.fr)**')
+check("rendu barré idempotent sur texte sain", mod._render_strikethrough(conv) == 'sorti en ~~2012~~ **[2017](https://hpe.com "HPE")**')
+check("rendu barré sans marqueur = inchangé", mod._render_strikethrough("texte normal") == "texte normal")
+
 # ---------------------------------------------------------------- _validate_correction
 orig = (
     "Le RAM DDR5 est cadencée en moyenne à 4800 MT/s. "
@@ -103,7 +169,14 @@ good = orig.replace(
     "~~avec les processeurs Scalable~~ [avec les Xeon Silver 4110](https://example.com/hpe \"Fiche HPE\")",
 )
 v, n = mod._validate_correction(orig, good)
-check("correction valide -> update", v == "update" and n == 3)  # 3 occurrences remplacées
+check("correction legacy auto-convertisse -> update n=3", v == "update" and n == 3)
+
+good_new = orig.replace(
+    "dure trois ans",
+    'dure **[cinq ans](https://x.fr "Corrigé : trois ans")**',
+)
+v, n = mod._validate_correction(orig, good_new)
+check("correction marqueur -> update n=3", v == "update" and n == 3)
 
 v, _ = mod._validate_correction(orig, orig)
 check("verbatim sans marqueur -> unchanged", v == "unchanged")
@@ -124,8 +197,8 @@ paraphrase = ("En matière de mémoire, la norme actuelle atteint des fréquence
               "Le matériel du fabricant visé commercialise des machines récentes à composants multiples. "
               "Les supports mécaniques rapides affichent une vélocité moindre que leur appellation. "
               "La couverture contractuelle de base s'étale sur plusieurs années.") * 3
-para = paraphrase.replace("plupart", "~~plupart~~ [partout](https://x.fr \"t\")").replace(
-    "fréquences", "~~fréquences~~ [cadences](https://y.fr \"t\")")
+para = paraphrase.replace("plupart", '~~plupart~~ [partout](https://x.fr "t")').replace(
+    "fréquences", '~~fréquences~~ [cadences](https://y.fr "t")')
 v, reason = mod._validate_correction(orig, para)
 check("paraphrase -> reject", v == "reject" and "paraphrase" in reason)
 
@@ -148,45 +221,52 @@ v, detail = mod._validate_correction(orig, "Autre contenu entièrement différen
 check("sans marqueur et dérive totale -> unchanged/reesquisse (jamais écrit, jamais d'alarme)",
       v == "unchanged" and detail == "reesquisse")
 
-# ---------------------------------------------------------------- _strip_self_corrections
-selfmd = ("Voici un point.\n"
-          "Je n'ai ~~pas d'outil de recherche web~~ **[des outils de recherche web]"
-          "(https://duckduckgo.com/?q=x \"Recherche Web\")** dans cet environnement.\n"
-          "Le serveur est sorti en ~~2012~~ **[2017](https://hpe.com \"HPE\")**.")
-stripped = mod._strip_self_corrections(selfmd)
-check("auto-correction restauree (texte d'origine)", "~~pas d'outil" not in stripped
-      and "Je n'ai pas d'outil de recherche web dans cet environnement." in stripped)
-check("vraie correction preservee", "~~2012~~ **[2017](https://hpe.com \"HPE\")**" in stripped)
-_orig3 = "Voici un point.\nJe n'ai pas d'outil de recherche web dans cet environnement.\nLe serveur est sorti en 2012."
-v, n = mod._validate_correction(_orig3, stripped)
-check("validate apres sanitizer : 1 seule correction", v == "update" and n == 1)
-check(" chevauchement de mots identique", mod._word_overlap(orig, orig) == 1.0)
+check("chevauchement de mots identique", mod._word_overlap(orig, orig) == 1.0)
 check("chevauchement de mots divergent", mod._word_overlap(orig, "autre chose totalement différente du tout") < 0.3)
 
-# ---------------------------------------------------------------- _revert_null_replacements (v1.0.6)
-nullmd = ('Le serveur ~~DL380~~ **[N/A](https://x.fr "t")** coute '
-          '~~3 500 EUR~~ **[MàJ](https://y.fr "t")** et la garantie ~~3 ans~~ **[indisponible](https://z.fr "t")**.')
-fixed = mod._revert_null_replacements(nullmd)
-check("N/A/MàJ/indisponible annules (mot d origine restaure)",
-      fixed == "Le serveur DL380 coute 3 500 EUR et la garantie 3 ans.")
-check("vraie valeur conservee",
-      mod._revert_null_replacements("sorti en ~~2012~~ **[2017](https://hpe.com \"HPE\")**")
-      == "sorti en ~~2012~~ **[2017](https://hpe.com \"HPE\")**")
-check("gras vide annule", mod._revert_null_replacements("texte ~~Qwen3.5~~** ") == "texte Qwen3.5")
-check("gras pendant fin de ligne annule", mod._revert_null_replacements("fin ~~X~~**\nsuite") == "fin X\nsuite")
+# ---------------------------------------------------------------- _strip_self_corrections
+selfmd = ("Voici un point.\n"
+          "Je n'ai **[des outils de recherche web](https://duckduckgo.com/?q=x "
+          "\"Corrigé : pas d'outil de recherche web\")** dans cet environnement.\n"
+          "Le serveur est sorti en **[→ 2017](https://hpe.com \"Corrigé : 2012\")**.")
+stripped = mod._strip_self_corrections(selfmd)
+check("auto-correction restaurée via le titre (texte d'origine)", "Corrigé : pas d'outil" not in stripped
+      and "Je n'ai pas d'outil de recherche web dans cet environnement." in stripped)
+check("vraie correction préservée", "**[→ 2017](https://hpe.com \"Corrigé : 2012\")**" in stripped)
+_orig3 = "Voici un point.\nJe n'ai pas d'outil de recherche web dans cet environnement.\nLe serveur est sorti en 2012."
+v, n = mod._validate_correction(_orig3, stripped)
+check("validate après sanitizer : 1 seule correction", v == "update" and n == 1)
+selfmd_legacy = ("Je n'ai ~~pas d'outil de recherche web~~ **[des outils de recherche web]"
+                 "(https://duckduckgo.com/?q=x \"Recherche Web\")** ici.")
+chain_self = mod._strip_self_corrections(mod._convert_legacy(selfmd_legacy))
+check("chaîne convert+strip sur legacy : auto-correction annulée",
+      chain_self == "Je n'ai pas d'outil de recherche web ici.")
 
-# ---------------------------------------------------------------- _arrow_numeric_links (v1.0.7)
-check("lien numerique fleche ajoutee",
-      mod._arrow_numeric_links('sorti en ~~2012~~ **[2017](https://hpe.com "HPE")**')
-      == 'sorti en ~~2012~~ **[→ 2017](https://hpe.com "HPE")**')
-check("lien non numerique intact",
-      mod._arrow_numeric_links('~~fermé~~ **[poids ouverts](https://x.fr "t")**')
-      == '~~fermé~~ **[poids ouverts](https://x.fr "t")**')
+# ---------------------------------------------------------------- _revert_null_replacements
+nullmd = ('Le serveur **[N/A](https://x.fr "Corrigé : DL380")** coute '
+          '**[MàJ](https://y.fr "Corrigé : 3 500 EUR")** et la garantie '
+          '**[indisponible](https://z.fr "Corrigé : 3 ans")**.')
+fixed = mod._revert_null_replacements(nullmd)
+check("N/A/MàJ/indisponible annulés (texte du titre restauré)",
+      fixed == "Le serveur DL380 coute 3 500 EUR et la garantie 3 ans.")
+check("vraie valeur conservée",
+      mod._revert_null_replacements('sorti en **[2017](https://hpe.com "Corrigé : 2012")**')
+      == 'sorti en **[2017](https://hpe.com "Corrigé : 2012")**')
+check("marqueur de remplacement vide annulé",
+      mod._revert_null_replacements('texte **[](https://q.fr "Corrigé : Qwen3.5")**') == "texte Qwen3.5")
+
+# ---------------------------------------------------------------- _arrow_numeric_links
+check("lien numérique flèche ajoutée",
+      mod._arrow_numeric_links('sorti en **[2017](https://hpe.com "Corrigé : 2012")**')
+      == 'sorti en **[→ 2017](https://hpe.com "Corrigé : 2012")**')
+check("lien non numérique intact",
+      mod._arrow_numeric_links('**[poids ouverts](https://x.fr "Corrigé : fermé")**')
+      == '**[poids ouverts](https://x.fr "Corrigé : fermé")**')
 check("flèche pas doublée",
-      mod._arrow_numeric_links('~~2012~~ **[→ 2017](https://hpe.com "HPE")**')
-      == '~~2012~~ **[→ 2017](https://hpe.com "HPE")**')
-check("quantite avec espace numerique aussi",
-      '[→ 15 000](' in mod._arrow_numeric_links('~~7 200~~ **[15 000](https://x.fr "t")**'))
+      mod._arrow_numeric_links('**[→ 2017](https://hpe.com "Corrigé : 2012")**')
+      == '**[→ 2017](https://hpe.com "Corrigé : 2012")**')
+check("quantité avec espace numérique aussi",
+      '[→ 15 000](' in mod._arrow_numeric_links('**[15 000](https://x.fr "Corrigé : 7 200")**'))
 
 # ---------------------------------------------------------------- _patch_output_message (v1.0.8)
 _out = [
@@ -195,11 +275,11 @@ _out = [
     {"type": "message", "role": "assistant",
      "content": [{"type": "output_text", "text": "texte d'origine"}]},
 ]
-patched, changed = mod._patch_output_message(_out, "~~2015~~ **[→ 2021](https://x.fr)")
+patched, changed = mod._patch_output_message(_out, '**[→ 2021](https://x.fr "Corrigé : 2015")**')
 check("sync timeline remplace le bloc message final", changed)
-check("nouveau texte present",
-      patched[-1]["content"][0]["text"] == "~~2015~~ **[→ 2021](https://x.fr)")
-check("blocs outils conserves", patched[0]["type"] == "function_call" and patched[1]["type"] == "function_call_output")
+check("nouveau texte présent",
+      patched[-1]["content"][0]["text"] == '**[→ 2021](https://x.fr "Corrigé : 2015")**')
+check("blocs outils conservés", patched[0]["type"] == "function_call" and patched[1]["type"] == "function_call_output")
 check("output absent = pas de changement", mod._patch_output_message(None, "x") == (None, False))
 check("output vide = pas de changement", mod._patch_output_message([], "x") == ([], False))
 check("timeline sans bloc message = pas de changement",
@@ -212,6 +292,18 @@ check("plusieurs blocs message sync aussi", c2 and m2[0]["content"][0]["text"] =
 # ---------------------------------------------------------------- valves
 check("valves max_searches défaut 6", mod.Action().Valves.model_fields["max_searches"].default == 6)
 check("valves strict_search défaut True", mod.Action().Valves.model_fields["strict_search"].default is True)
+check("valves correction_display défaut replace",
+      mod.Action().Valves.model_fields["correction_display"].default == "replace")
+_opts = mod.Action().Valves.model_fields["correction_display"].json_schema_extra["input"]["options"]
+check("valves correction_display select replace/strikethrough", sorted(_opts) == ["replace", "strikethrough"])
+check("valves correction_color défaut jaune",
+      mod.Action().Valves.model_fields["correction_color"].default == "jaune")
+_copts = mod.Action().Valves.model_fields["correction_color"].json_schema_extra["input"]["options"]
+check("valves correction_color palette complète",
+      sorted(_copts) == sorted(["jaune", "orange", "vert", "rose", "bleu", "cyan", "aucune"]))
+check("valves show_citations défaut True", mod.Action().Valves.model_fields["show_citations"].default is True)
+check("valves anciennes (dict sans correction_display) = replace",
+      mod.Action().Valves.model_validate({"search_mode": "native"}).correction_display == "replace")
 
 if FAILURES:
     print(f"\n{len(FAILURES)} ÉCHEC(S) : {FAILURES}")
