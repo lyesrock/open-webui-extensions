@@ -2,9 +2,11 @@
 
 One-click **silent correction** of any assistant answer, using **your instance's own web
 search**. Unlike a fact-check report, nothing is appended and no new message is created:
-the clicked answer is **replaced in place** — each factual error becomes
-`~~wrong~~ **[corrected](source-url)**` right inside the original text. Readers never see
-that a correction pass happened (and the strikethrough makes the change transparent).
+the clicked answer is **replaced in place** — each factual error is removed and the
+corrected value is written as a marked link, `**[corrected](source-url "Corrigé : wrong")**`,
+right inside the original text. Readers never see that a correction pass happened: the
+wrong value survives only in the link's tooltip — *struck through* there — while the
+replacement shows with a subtle highlight.
 
 ## ✨ Features
 
@@ -32,6 +34,10 @@ that a correction pass happened (and the strikethrough makes the change transpar
 - 🙈 Nothing is ever added to the conversation: no injected user message, no assistant
   follow-up, no visible instruction
 - 🧪 Ships with a dependency-free test suite: `python actions/test_correct_web.py`
+- 🎨 **Configurable rendering** (valves): highlight color, or classic `~~wrong~~ → corrected`
+  strikethrough; the wrong value always stays in the link tooltip (struck through there in
+  `replace` style). Purely server-side — no custom CSS required, but a `custom.css` rule
+  targeting `a[title^="Corrigé"]` makes the replacement pop (see *Display* below)
 
 ## 🧭 How it works
 
@@ -77,6 +83,9 @@ Prerequisites:
 | `base_url` | *(empty)* | Internal backend URL for self-calls (empty = auto) |
 | `timeout_seconds` | `300` | Maximum wall time for the correction |
 | `max_chars` | `16000` | Maximum length of the answer submitted |
+| `correction_display` | `replace` | `replace` = wrong value removed, replacement highlighted; `strikethrough` = legacy `~~wrong~~ **corrected**` rendering |
+| `correction_color` | `jaune` | Highlight color of the replacement (`jaune`/`orange`/`vert`/`rose`/`bleu`/`cyan`/`aucune`) — `replace` style only |
+| `show_citations` | `true` | `false` strips the web citation badges (`[1]`, `[2]`…) from the corrected text |
 | `priority` | `1` | Button order (lower = further left) |
 
 ## 🧨 Edge cases handled
@@ -90,9 +99,28 @@ Prerequisites:
   false-triggers
 - **Model "corrects" the assistant's own tools/capabilities** → the sanitizer strips
   that segment and restores the original wording before anything is written
+- **Numeric replacement (`[2021](url)`)** → Open WebUI's built-in *citation* marked
+  extension captures any `[…]` whose text starts with a digit and destroys the link at
+  render time. The action writes an invisible leading space (`[ 2021](url)`) so the link
+  survives untouched, and it neutralizes any arrow/prefix a model may still emit inside a
+  correction marker (`[→ X]` → `[X]`) so the visible text never carries a stray glyph
 - **Update write fails** (network, permissions) → corrected text discarded, original
   kept; error toast
 - **Temporary chats** → front-end merge contract fallback (undoable)
+
+## 🎨 Display (optional custom CSS)
+
+The replacement is a markdown link whose `title` starts with `Corrigé :` (plus the wrong
+value, struck through in the tooltip). Without any CSS it reads as a normal link; to make
+it pop, add to **Admin Panel → Interface → Custom CSS** (or serve
+`/static/custom.css` on your instance):
+
+```css
+.markdown-prose a[title^="Corrigé"], .markdown a[title^="Corrigé"] {
+  background: #fef08a; color: #1f2937; text-decoration: none;
+  padding: 0 2px; border-radius: 2px;
+}
+```
 
 ## 📄 License
 

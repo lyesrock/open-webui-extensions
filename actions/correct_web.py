@@ -1,8 +1,8 @@
 """
 title: Corriger sur le web
 author: lyesrock
-version: 1.1.0
-description: Recherche le web en arrière-plan puis corrige la réponse cliquée EN PLACE (aucun rapport, aucun nouveau message) ; le texte faux est SUPPRIMÉ et le remplacement marqué **[corrigé](url "Corrigé : faux")** (surligné jaune à l'affichage)
+version: 1.1.1
+description: Recherche le web en arrière-plan puis corrige la réponse cliquée EN PLACE (aucun rapport, aucun nouveau message) ; le texte faux est SUPPRIMÉ et barré dans l'infobulle, le remplacement est surligné **[corrigé](url "Corrigé : faux")**
 required_open_webui_version: 0.13.0
 license: MIT
 """
@@ -201,13 +201,13 @@ def _correction_rules(display: str):
             "quantité), barre-LE aussi : corrige TOUS les mots faux d'une même phrase, pas seulement le premier ;\n"
             "   - tout le reste de la phrase reste DEBOUT, mot pour mot.\n"
             "   EXACTE (un seul mot barré) : « Le ProLiant DL380 Gen10 est sorti en ~~2012~~ "
-            "**[→ 2017](https://exemple.fr/hpe \"HPE ProLiant Gen10\") » —\n"
+            "**[2017](https://exemple.fr/hpe \"HPE ProLiant Gen10\") » —\n"
             "   INTERDITE (phrase entière barrée) : « ~~Le ProLiant DL380 Gen10 est sorti en 2012~~ "
             "**[Le ProLiant DL380 Gen10 est sorti en 2017](https://exemple.fr/hpe \\\"HPE\\\") ».\n"
             + _REGLE_VALEUR +
-            "   - quand le remplacement est un NOMBRE SEUL (année, quantité), écris le texte du lien "
-            "avec une flèche : **[→ 2021](URL \"titre\")** — sans la flèche, Open WebUI interprète "
-            "« [2021] » comme une note de bas de page et le lien est détruit à l'affichage ;\n"
+            "   - quand le remplacement est un NOMBRE SEUL (année, quantité), écris-le normalement : "
+            "**[2021](URL \"titre\")** — n'ajoute ni flèche ni préfixe, le système protège le lien "
+            "lui-même contre la note de bas de page ;\n"
         )
         regle5 = (
             "5. SORTIE STRICTE : uniquement le texte corrigé. Aucun préambule, aucun titre, aucune section, "
@@ -229,13 +229,13 @@ def _correction_rules(display: str):
             "d'une même phrase, pas seulement le premier ;\n"
             "   - tout le reste de la phrase reste DEBOUT, mot pour mot.\n"
             "   EXACTE (un seul mot remplacé) : « Le ProLiant DL380 Gen10 est sorti en "
-            "**[→ 2017](https://exemple.fr/hpe \"Corrigé : 2012\") » —\n"
+            "**[2017](https://exemple.fr/hpe \"Corrigé : 2012\") » —\n"
             "   INTERDITE (phrase entière remplacée) : « **[Le ProLiant DL380 Gen10 est sorti en 2017]"
             "(https://exemple.fr/hpe \"Corrigé : Le ProLiant DL380 Gen10 est sorti en 2012\") ».\n"
             + _REGLE_VALEUR +
-            "   - quand le remplacement est un NOMBRE SEUL (année, quantité), écris le texte du lien "
-            "avec une flèche : **[→ 2021](URL \"Corrigé : valeur fausse\")** — sans la flèche, Open WebUI "
-            "interprète « [2021] » comme une note de bas de page et le lien est détruit à l'affichage ;\n"
+            "   - quand le remplacement est un NOMBRE SEUL (année, quantité), écris-le normalement : "
+            "**[2021](URL \"Corrigé : valeur fausse\")** — n'ajoute ni flèche ni préfixe, le système "
+            "protège le lien lui-même contre la note de bas de page ;\n"
         )
         regle5 = (
             "5. SORTIE STRICTE : uniquement le texte corrigé. Aucun préambule, aucun titre, aucune section, "
@@ -568,13 +568,13 @@ def _strip_fences(text: str) -> str:
 # jeton optionnel dans le titre (« Corrigé #orange : … ») : purement cosmétique,
 # ignoré par tous les calculs, jamais imposé au modèle (injecté côté serveur).
 _CORR_LINK_RE = re.compile(
-    r"(?:\*\*)?\[([^\]\n]{1,160})\]\(\s*([^)\s][^)\n]{0,240}?)\s+\"Corrigé(?: #[a-z]+)?\s*:\s*([^\"\n]{1,80})\"\s*\)(?:\*\*)?"
+    r"(?:\*\*)?\[([^\]\n]{1,160})\]\(\s*([^)\s][^)\n]{0,240}?)\s+\"Corrigé(?: #[a-z]+)?\s*:\s*([^\"\n]{1,200})\"\s*\)(?:\*\*)?"
 )
 _LEGACY_SEG_RE = re.compile(
     r"~~([^~\n]{1,160})~~\s*(?:\*\*)?\[([^\]\n]{1,160})\]\(\s*([^)\n]{1,240}?)\s*\)(?:\*\*)?"
 )
 _TITLE_SRC_RE = re.compile(r"^(\S+)\s+\"([^\"]*)\"$")
-_TITLE_MARKER_RE = re.compile(r"\"[Cc]orrig[ée]?(?: #[a-z]+)?\s*:\s*([^\"\n]{1,80})\"")
+_TITLE_MARKER_RE = re.compile(r"\"([Cc]orrig[ée]?(?: #[a-z]+)?)\s*:\s*([^\"\n]{1,200})\"")
 _LEFTOVER_TILDE_RE = re.compile(r"~~([^~\n]{1,160})~~")
 _EMPTY_BOLD_RE = re.compile(r"~~([^~\n]{1,160})~~\s*\*\*\s*\*\*")
 _DANGLING_BOLD_RE = re.compile(r"~~([^~\n]{1,160})~~\s*\*\*[ \t]*$", re.MULTILINE)
@@ -622,9 +622,11 @@ def _apply_color(md: str, color: str) -> str:
 def _finalize_render(md: str, valves) -> str:
     """Rendu final selon les valves d'affichage — appliqué APRÈS validation/sanitization
     (qui travaillent toujours sur le format canonique interne). Ordre important :
-    style -> couleur -> suppression des badges de citation."""
+    style -> couleur -> barré de l'infobulle -> suppression des badges de citation."""
     if _resolve_display(valves) == "strikethrough":
         md = _render_strikethrough(md)
+    else:
+        md = _strike_marker_titles(md)
     md = _apply_color(md, _resolve_color(valves))
     if not _resolve_keep_citations(valves):
         md = _CITATION_BADGE_RE.sub("", md)
@@ -639,14 +641,15 @@ def _convert_legacy(md: str) -> str:
     md = _LEGACY_SEG_RE.sub(_legacy_to_new, md)
     md = _EMPTY_BOLD_RE.sub(r"\1", md)
     md = _DANGLING_BOLD_RE.sub(r"\1", md)
-    md = _TITLE_MARKER_RE.sub(lambda m: '"Corrigé : ' + m.group(1) + '"', md)
+    md = _TITLE_MARKER_RE.sub(lambda m: '"Corrigé : ' + _unstrike(m.group(2)) + '"', md)
     # ~~restant sans lien de correction associe -> texte nu (plus jamais de barre)
     md = _LEFTOVER_TILDE_RE.sub(r"\1", md)
     return md
 
 
 def _legacy_to_new(m):
-    old, new, rest = m.group(1), m.group(2), m.group(3).strip()
+    old, new, rest = m.group(1), m.group(2).strip(), m.group(3).strip()
+    new = _ARROW_TEXT_RE.sub("", new) or new
     t = _TITLE_SRC_RE.match(rest)
     if t:
         title = f"Corrigé : {old} — {t.group(2)}"[:200]
@@ -655,12 +658,45 @@ def _legacy_to_new(m):
 
 
 _CANON_TITLE_SPLIT = " — "
+_STRIKE_CHAR = "\u0336"  # U+0336 : barre combinante — rend un barré dans les tooltips natifs (texte brut)
+
+
+def _unstrike(s: str) -> str:
+    """Retire les barres combinantes d'une valeur (titre déjà barré recopié par le
+    modèle dans une re-correction) — les sanitizers manipulent toujours du texte propre."""
+    return s.replace(_STRIKE_CHAR, "")
+
+
+def _strike_old_value(old: str) -> str:
+    """Barré « visuel » pour l'infobulle : chaque caractère non-espace suivi de U+0336.
+    L'attribut title des liens est du texte brut (impossible d'y mettre du HTML) — le
+    combinant est le SEUL moyen d'afficher un barré dans l'infobulle native du navigateur."""
+    return "".join(ch + _STRIKE_CHAR if ch.strip() else ch for ch in old)
+
+
+_MARKED_TITLE_RE = re.compile(r"(\"Corrigé(?: #[a-z]+)?\s*:\s*)([^\"]{1,220})(\")")
+
+
+def _strike_marker_titles(md: str) -> str:
+    """Applique le barré de l'infobulle sur l'ANCIENNE valeur du titre canonique
+    (« Corrigé : <faux barré> — source »). Idempotent : un titre déjà barré est laissé."""
+
+    def _mk(m):
+        title = m.group(2)
+        if _STRIKE_CHAR in title:
+            return m.group(0)
+        old, sep, src = title.partition(_CANON_TITLE_SPLIT)
+        if not old.strip():
+            return m.group(0)
+        return m.group(1) + _strike_old_value(old.strip()) + sep + src + m.group(3)
+
+    return _MARKED_TITLE_RE.sub(_mk, md)
 
 
 def _title_old(title: str) -> str:
     """Dans un titre canonique « ancien — source », seule la partie « ancien » est le
     texte d'origine à restaurer quand une correction est annulée par les sanitizers."""
-    return title.partition(_CANON_TITLE_SPLIT)[0].strip()
+    return _unstrike(title.partition(_CANON_TITLE_SPLIT)[0]).strip()
 
 
 def _render_strikethrough(md: str) -> str:
@@ -699,7 +735,7 @@ _NULL_REPL_RE = re.compile(
     re.IGNORECASE,
 )
 _EMPTY_MARKER_RE = re.compile(
-    r"(?:\*\*)?\[\s*\]\(\s*[^)\s][^)\n]{0,240}?\s+\"Corrigé(?: #[a-z]+)?\s*:\s*([^\"\n]{1,80})\"\s*\)(?:\*\*)?"
+    r"(?:\*\*)?\[\s*\]\(\s*[^)\s][^)\n]{0,240}?\s+\"Corrigé(?: #[a-z]+)?\s*:\s*([^\"\n]{1,200})\"\s*\)(?:\*\*)?"
 )
 
 
@@ -719,14 +755,34 @@ def _revert_null_replacements(md: str) -> str:
     return md
 
 
-_NUMERIC_LINK_TEXT_RE = re.compile(r"(\*\*)\[(\d[\d\s.,\u00a0\u202f]*)\]\(")
+_ARROW_TEXT_RE = re.compile(r"^\s*→\s*")
+_NUMERIC_LINK_TEXT_RE = re.compile(
+    r"(^|[^\\[])((?:\*\*)?)\[(?:→\s*)?(\d[\d\s.,\u00a0\u202f]*)\]\(", re.MULTILINE
+)
 
 
-def _arrow_numeric_links(md: str) -> str:
-    """L'extension « citation » d'Open WebUI capture tout [texte](url) dont le texte est
-    purement numérique (« [2021] ») et le rend en note — le lien est détruit à l'affichage.
-    Préfixer le texte par « → » empêche la capture de citation sans changer le sens."""
-    return _NUMERIC_LINK_TEXT_RE.sub(r"\1[→ \2](", md)
+def _protect_numeric_links(md: str) -> str:
+    """L'extension « citation » d'Open WebUI capture tout [texte](url) dont le texte
+    commence IMMÉDIATEMENT par un chiffre (« [2021](url) ») et détruit le lien à
+    l'affichage (rendu en note + texte brut). Un espace invisible en tête du texte du
+    lien empêche la capture sans rien changer à l'affichage (« 2021 » s'affiche pareil)
+    — il remplace l'ancienne flèche « → » qui, elle, était visible du lecteur.
+    Consomme aussi les flèches héritées des corrections v1.0.x."""
+    return _NUMERIC_LINK_TEXT_RE.sub(
+        lambda m: m.group(1) + m.group(2) + "[ " + m.group(3) + "](", md
+    )
+
+
+_MARKER_ARROW_LINK_RE = re.compile(
+    r"\[\u2192\s*([^\]\n]{1,160})\]\(\s*([^)\n]{1,240}?)\s+\"Corrig"
+)
+
+
+def _strip_marker_arrows(md: str) -> str:
+    """Un modèle qui ignore la consigne peut coller « → » aussi sur un texte NON
+    numérique (« [→ Qwen 2.5](url \"Corrigé : …\") »). La flèche n'a plus aucune raison
+    d'exister en design v1.1.1 — retirée de tout lien dont le titre est un marqueur."""
+    return _MARKER_ARROW_LINK_RE.sub(r'[\1](\2 "Corrig', md)
 
 
 def _word_overlap(original: str, corrected: str) -> float:
@@ -804,7 +860,7 @@ async def _correct_in_place(request, model_id, chain, instruction, web_search_on
         progress.cancel()
 
     duration = round(time.monotonic() - started, 1)
-    corrected = _strip_self_corrections(_revert_null_replacements(_arrow_numeric_links(_convert_legacy(corrected))))
+    corrected = _strip_self_corrections(_revert_null_replacements(_strip_marker_arrows(_protect_numeric_links(_convert_legacy(corrected)))))
     original = str(chain[-1].get("content") or "") if chain else ""
     verdict, detail = _validate_correction(original, corrected)
 
@@ -1056,7 +1112,7 @@ class Action:
             progress.cancel()
 
         duration = round(time.monotonic() - started, 1)
-        corrected = _strip_self_corrections(_revert_null_replacements(_arrow_numeric_links(_convert_legacy(corrected))))
+        corrected = _strip_self_corrections(_revert_null_replacements(_strip_marker_arrows(_protect_numeric_links(_convert_legacy(corrected)))))
         verdict, detail = _validate_correction(full_content, corrected)
         if verdict == "unchanged":
             await _log(emitter=__event_emitter__, message=f"Terminée en {duration} s : aucune erreur à corriger — texte inchangé.")

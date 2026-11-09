@@ -1,4 +1,4 @@
-"""Tests unitaires de l'Action « Corriger sur le web » (logique pure, sans réseau).
+﻿"""Tests unitaires de l'Action « Corriger sur le web » (logique pure, sans réseau).
 
 Lancement : python test_correctweb.py
 """
@@ -106,37 +106,41 @@ check("display défaut replace", mod._resolve_display(V()) == "replace")
 check("display valve strikethrough", mod._resolve_display(VD()) == "strikethrough")
 check("display casse/espaces tolérée", mod._resolve_display(type("X", (V,), {"correction_display": "  StrikeThrough "})()) == "strikethrough")
 
-# ---------------------------------------------------------------- couleur + citations (v1.1.0)
+# ---------------------------------------------------------------- couleur + citations (v1.1.0/1.1.1)
 check("couleur défaut jaune = aucune injection", mod._resolve_color(V()) == "")
 check("couleur valve orange", mod._resolve_color(type("X", (V,), {"correction_color": "Orange"})()) == "orange")
 check("couleur inconnue retombe sur jaune", mod._resolve_color(type("X", (V,), {"correction_color": "chartreuse"})()) == "")
 check("couleur aucune injectée", mod._resolve_color(type("X", (V,), {"correction_color": "aucune"})()) == "aucune")
-colored = mod._apply_color('sorti en **[→ 2017](https://hpe.com "Corrigé : 2012")**', "orange")
+colored = mod._apply_color('sorti en **[2017](https://hpe.com "Corrigé : 2012")**', "orange")
 check("jeton couleur injecté dans le titre",
-      colored == 'sorti en **[→ 2017](https://hpe.com "Corrigé #orange : 2012")**')
+      colored == 'sorti en **[2017](https://hpe.com "Corrigé #orange : 2012")**')
 check("marqueur avec jeton couleur toujours détecté (count)",
       len(mod._CORR_LINK_RE.findall(colored)) == 1)
 check("jeton couleur normalisé par convert (re-correction propre)",
-      mod._convert_legacy(colored) == 'sorti en **[→ 2017](https://hpe.com "Corrigé : 2012")**')
+      mod._convert_legacy(colored) == 'sorti en **[2017](https://hpe.com "Corrigé : 2012")**')
 check("sanitizer fonctionne sur marqueur coloré",
       mod._revert_null_replacements('**[N/A](https://x.fr "Corrigé #vert : 3 ans")**') == "3 ans")
+_strip_cit = mod._finalize_render('texte [1][2] corrigé **[x](https://a.fr "Corrigé : y")**[3]',
+                                  type("X", (V,), {"show_citations": False})())
 check("badges citation retirés quand show_citations=False",
-      mod._finalize_render('texte [1][2] corrigé **[x](https://a.fr "Corrigé : y")**[3]',
-                           type("X", (V,), {"show_citations": False})())
-      == 'texte corrigé **[x](https://a.fr "Corrigé : y")**')
-check("badges conservés par défaut",
-      'texte [1] corrigé **[x](https://a.fr "Corrigé : y")**'
-      in mod._finalize_render('texte [1] corrigé **[x](https://a.fr "Corrigé : y")**', V()))
+      _strip_cit.startswith('texte corrigé **[x](https://a.fr "Corrigé : y')
+      and "[1]" not in _strip_cit and "[2]" not in _strip_cit)
 check("lien corrigé numérique Jamais retiré par le strip citation",
-      mod._finalize_render('**[→ 2021](https://x.fr "Corrigé : 2015")**',
-                           type("X", (V,), {"show_citations": False})())
-      .startswith('**[→ 2021]'))
-fin = mod._finalize_render('sorti en **[2017](https://hpe.com "Corrigé : 2012")**',
+      mod._finalize_render('**[ 2021](https://x.fr "Corrigé : 2015")**',
+                           type("X", (V,), {"show_citations": False})()).startswith('**[ 2021]'))
+check("badges conservés par défaut",
+      "texte [1] corrigé" in mod._finalize_render('texte [1] corrigé **[x](https://a.fr "Corrigé : y")**', V()))
+fin = mod._finalize_render('sorti en **[ 2017](https://hpe.com "Corrigé : 2012")**',
                            type("X", (V,), {"correction_display": "strikethrough", "correction_color": "rose"})())
-check("finalize strikethrough = rendu barré", fin == 'sorti en ~~2012~~ **[2017](https://hpe.com)**')
-fin2 = mod._finalize_render('sorti en **[2017](https://hpe.com "Corrigé : 2012")**',
+check("finalize strikethrough = rendu barré", fin == 'sorti en ~~2012~~ **[ 2017](https://hpe.com)**')
+fin2 = mod._finalize_render('sorti en **[ 2017](https://hpe.com "Corrigé : 2012")**',
                             type("X", (V,), {"correction_color": "rose"})())
-check("finalize replace + couleur", fin2 == 'sorti en **[2017](https://hpe.com "Corrigé #rose : 2012")**')
+check("finalize replace + couleur + infobulle barrée",
+      fin2 == 'sorti en **[ 2017](https://hpe.com "Corrigé #rose : 2\u03360\u03361\u03362\u0336")**')
+check("infobulle barrée idempotente",
+      mod._finalize_render(fin2, type("X", (V,), {"correction_color": "rose"})()) == fin2)
+check("re-correction d'un titre barré = titre propre",
+      mod._convert_legacy(fin2) == 'sorti en **[ 2017](https://hpe.com "Corrigé : 2012")**')
 
 # ---------------------------------------------------------------- _convert_legacy / _render_strikethrough (v1.1.0)
 conv = mod._convert_legacy('sorti en ~~2012~~ **[2017](https://hpe.com "HPE")**')
@@ -152,8 +156,9 @@ check("gras pendant fin de ligne annule", mod._convert_legacy("fin ~~X~~**\nsuit
 check("conversion idempotente", mod._convert_legacy(conv) == conv)
 rev = mod._render_strikethrough('sorti en **[2017](https://hpe.com "Corrigé : 2012 — HPE")**')
 check("canonique -> rendu barré", rev == 'sorti en ~~2012~~ **[2017](https://hpe.com "HPE")**')
-rev2 = mod._render_strikethrough('sorti en **[→ 2021](https://x.fr "Corrigé : 2015")**')
-check("rendu barré sans source garde flèche", rev2 == 'sorti en ~~2015~~ **[→ 2021](https://x.fr)**')
+rev2 = mod._render_strikethrough('sorti en **[ 2021](https://x.fr "Corrigé : 2015")**')
+check("rendu barré sans source garde l'espace de protection",
+      rev2 == 'sorti en ~~2015~~ **[ 2021](https://x.fr)**')
 check("rendu barré idempotent sur texte sain", mod._render_strikethrough(conv) == 'sorti en ~~2012~~ **[2017](https://hpe.com "HPE")**')
 check("rendu barré sans marqueur = inchangé", mod._render_strikethrough("texte normal") == "texte normal")
 
@@ -255,18 +260,39 @@ check("vraie valeur conservée",
 check("marqueur de remplacement vide annulé",
       mod._revert_null_replacements('texte **[](https://q.fr "Corrigé : Qwen3.5")**') == "texte Qwen3.5")
 
-# ---------------------------------------------------------------- _arrow_numeric_links
-check("lien numérique flèche ajoutée",
-      mod._arrow_numeric_links('sorti en **[2017](https://hpe.com "Corrigé : 2012")**')
-      == 'sorti en **[→ 2017](https://hpe.com "Corrigé : 2012")**')
+# ---------------------------------------------------------------- _protect_numeric_links (espace invisible remplace la flèche)
+check("lien numérique espace invisible ajoutée",
+      mod._protect_numeric_links('sorti en **[2017](https://hpe.com "Corrigé : 2012")**')
+      == 'sorti en **[ 2017](https://hpe.com "Corrigé : 2012")**')
 check("lien non numérique intact",
-      mod._arrow_numeric_links('**[poids ouverts](https://x.fr "Corrigé : fermé")**')
+      mod._protect_numeric_links('**[poids ouverts](https://x.fr "Corrigé : fermé")**')
       == '**[poids ouverts](https://x.fr "Corrigé : fermé")**')
-check("flèche pas doublée",
-      mod._arrow_numeric_links('**[→ 2017](https://hpe.com "Corrigé : 2012")**')
-      == '**[→ 2017](https://hpe.com "Corrigé : 2012")**')
+check("espace pas doublée",
+      mod._protect_numeric_links('**[ 2017](https://hpe.com "Corrigé : 2012")**')
+      == '**[ 2017](https://hpe.com "Corrigé : 2012")**')
 check("quantité avec espace numérique aussi",
-      '[→ 15 000](' in mod._arrow_numeric_links('**[15 000](https://x.fr "Corrigé : 7 200")**'))
+      '[ 15 000](' in mod._protect_numeric_links('**[15 000](https://x.fr "Corrigé : 7 200")**'))
+check("flèche héritée v1.0.x consommée",
+      mod._protect_numeric_links('**[→ 2017](https://hpe.com "Corrigé : 2012")**')
+      == '**[ 2017](https://hpe.com "Corrigé : 2012")**')
+check("début de ligne protégé",
+      mod._protect_numeric_links('[2012](https://x.fr)') == '[ 2012](https://x.fr)')
+check("badge citation sans lien pas touché",
+      mod._protect_numeric_links('texte [1] et [2,3] fin') == 'texte [1] et [2,3] fin')
+check("flèche legacy retirée par convert",
+      mod._convert_legacy('~~2012~~ **[→ 2017](https://hpe.com "HPE")**')
+      == '**[2017](https://hpe.com "Corrigé : 2012 — HPE")**')
+check("flèche texte non numerique du marqueur retirée",
+      mod._strip_marker_arrows('modèle **[→ Qwen 2.5](https://q.fr "Corrigé : Qwen 2")**')
+      == 'modèle **[Qwen 2.5](https://q.fr "Corrigé : Qwen 2")**')
+check("flèche hors marqueur pas touchée",
+      mod._strip_marker_arrows('direction **[→](https://x.fr) puis [→ 2017](https://x.fr)')
+      == 'direction **[→](https://x.fr) puis [→ 2017](https://x.fr)')
+_chain = mod._strip_self_corrections(mod._revert_null_replacements(
+    mod._strip_marker_arrows(mod._protect_numeric_links(mod._convert_legacy(
+        'modèle **[→ Qwen 2.5](https://q.fr "Corrigé : Qwen 2")** sorti en **[→ 2017](https://h.fr "HPE")**')))))
+check("chaîne complète : plus AUCUNE flèche visible",
+      "→" not in _chain and '[ 2017](' in _chain and '[Qwen 2.5](' in _chain)
 
 # ---------------------------------------------------------------- _patch_output_message (v1.0.8)
 _out = [
